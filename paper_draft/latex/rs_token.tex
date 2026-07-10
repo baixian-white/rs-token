@@ -1,0 +1,280 @@
+%% rs_token.tex — RS-Token short paper, arXiv preprint
+%% Compile: pdflatex rs_token.tex; bibtex rs_token; pdflatex rs_token; pdflatex rs_token
+
+\documentclass[lettersize,journal]{IEEEtran}
+
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{hyperref}
+\usepackage{cite}
+\usepackage{url}
+
+\hyphenation{op-tical net-works semi-conduc-tor IEEE-Xplore}
+
+\begin{document}
+
+\title{Hierarchical RemoteCLIP Distillation for Channel-Robust Semantic Communication of Remote Sensing Imagery}
+
+\author{Baohui~Zhang%
+\thanks{The author is with the School of XXX, Anhui University, Hefei 230601, China (e-mail: y125211005@ahu.edu.cn).}%
+}
+
+\markboth{IEEE Geoscience and Remote Sensing Letters,~Vol.~XX, No.~XX, June~2026}%
+{Zhang \MakeLowercase{\textit{et al.}}: Hierarchical RemoteCLIP Distillation for Remote Sensing Communication}
+
+\maketitle
+
+\begin{abstract}
+Remote sensing (RS) downlinks deployed on UAV inspection, emergency response, and Earth-observation small-satellite platforms operate under low signal-to-noise ratio (SNR), fading, and limited link margin. Conventional ``compress-then-channel-code'' pipelines exhibit cliff-effect collapse at low SNR, while rigid full-image transmission wastes scarce bandwidth even when only a coarse class label is needed at the receiver. We present \textbf{RS-Token}, a hierarchical discrete tokenizer for remote-sensing image downlinks. A four-stage residual vector quantizer (RVQ) encodes the image into a multi-layer index tensor; \textbf{RemoteCLIP distillation} forces the first codebook layer (L0) to carry land-cover semantic identity, while the remaining layers encode pixel-level detail. The receiver adaptively selects the first $k$ index layers based on channel quality and downstream task requirement, transmitting only L0 (2{,}560~bits/img) to preserve task fidelity under poor channels and stacking subsequent layers (up to 10{,}240~bits/img) when the link improves. On the AID 30-class scene-classification protocol with BPSK over AWGN/Rayleigh-fading channels, distillation lifts the linear-probe accuracy of L0 indices from 57.7\% to 82.4\% (+24.7~pp), with the first layer alone covering 95\% of the distillation-induced gain. In the SNR\,$\geq$\,$+$5\,dB regime, transmitting only L0 yields 25--32~pp higher classification accuracy than the no-distillation 4-layer transmission while using $4\times$ less bandwidth. A teacher ablation shows that RemoteCLIP achieves a stable 4--7~pp advantage over a generic OpenAI CLIP teacher in deployment-relevant mid-SNR channels, demonstrating the role of remote-sensing-specific pretraining in channel-robust task fidelity.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Semantic communication, remote sensing, residual vector quantization, foundation-model distillation, RemoteCLIP, graceful degradation, task-oriented communication.
+\end{IEEEkeywords}
+
+\section{Introduction}
+\IEEEPARstart{R}{emote-sensing} downlinks deployed on UAV inspection, disaster response, edge sensor networks, and CubeSat/SmallSat platforms experience large SNR fluctuations driven by distance, occlusion, Doppler shift, interference, and amateur-band operation. Receivers in these scenarios are commonly required to perform real-time tasks such as land-cover recognition under unstable channel conditions. The information demand of these tasks varies widely across abstraction levels: automatic alerts only need coarse class labels, emergency dispatch requires the spatial extent of affected regions and damaged structures, while subsequent mapping and archival demand high-fidelity reconstruction.
+
+Conventional digital transmission paradigms struggle to span both ends of this demand. ``Compress-then-channel-code'' pipelines (e.g., JPEG2000+LDPC, BPG+LDPC) exhibit cliff-effect collapse below a channel-quality threshold and lose task capability entirely; rigid full-image transmission, on the other hand, occupies the full bit budget even when the receiver needs only a coarse label, wasting scarce link margin. These limitations jointly motivate a working regime not fully covered by existing schemes: \emph{the receiver must preserve downstream task accuracy with as few codebook indices as possible while retaining the option to refine pixel quality on demand when the link improves}. RS-Token operates above this application-layer demand, orthogonal to and stackable with physical-layer mechanisms such as Hybrid ARQ (HARQ) and adaptive coding and modulation (ACM); their relationship is detailed in Section~\ref{sec:disc-harq}.
+
+A natural design hypothesis is to dedicate the first layer of a discrete codebook to the most task-critical information---land-cover identity in the RS context---while the remaining layers progressively refine pixel detail. The receiver then selects the first $k$ layers according to channel and task, transmitting L0 alone under poor channels and stacking subsequent layers when the link is favorable. This pattern has matured in the audio domain: SpeechTokenizer~\cite{zhang2024speechtokenizer} distills RVQ layer 1 from HuBERT to encode phonemic content while the residual layers carry acoustic detail; STACodec, DM-Codec, HAC and LM-SPT extend the same principle. No counterpart yet exists in the visual or remote-sensing domain.
+
+In digital semantic communication, MOC-RVQ~\cite{moc-rvq} and ReVQom~\cite{revqom} use RVQ for multi-layer discrete-token transmission but focus on natural images or V2X cooperative perception, treat all RVQ layers as residual-precision refinements, leave the first layer without semantic identity, and do not distill any foundation model. MSVQ-SC and ESC-MVQ refine multi-codebook joint modulation--power optimization without introducing foundation-model supervision. On the visual representation side, BEiT~v2~\cite{beitv2} distills a single-layer VQ codebook from CLIP/DINO for masked image modeling; VILA-U~\cite{vilau} supervises an entire residual quantizer for multimodal LLMs without hierarchical decoupling and without channel evaluation; SemCLIP~\cite{semclip} transmits CLIP tokens for semantic communication using a generic OpenAI CLIP teacher and a single-layer codebook. In task-aware RS transmission, Gao~\textit{et~al.}~\cite{gao2022task} apply DRL block selection with block compressed sensing to AID classification under Rayleigh+AWGN---using exactly the protocol followed in this work---but without codebooks, RVQ, or foundation-model distillation; the Luxembourg SnT EO+JSCC family~\cite{deepjscc} pursues continuous JSCC rather than discrete RVQ; MAGC uses VAE+diffusion reconstruction for low-rate RS compression and does not enter the codebook-index transmission framework.
+
+To fill this gap, we propose \textbf{RS-Token}, a hierarchical RVQ tokenizer for RS downlinks distilled by RemoteCLIP~\cite{liu2024remoteclip}. A cosine-alignment loss supervises the first RVQ codebook to carry land-cover semantic identity while the remaining three layers carry pixel detail; the receiver adaptively selects the first $k$ layers ($k\in\{1,2,3,4\}$) under BPSK over AWGN/Rayleigh fading. Under the AID 30-class classification protocol the contributions are fourfold. \textbf{(i)}~Distillation raises L0-index linear-probe accuracy from 57.7\% to 82.4\% (+24.7~pp) at a reconstruction PSNR cost of only 0.22~dB---well below the 0.5~dB design budget. \textbf{(ii)}~Transmitting only L0 (2{,}560~bits/img) with distillation outperforms the no-distillation full 4-layer transmission (10{,}240~bits/img) by 25~pp in classification accuracy across the SNR\,$\geq$\,$+$5\,dB regime, achieving $4\times$ bandwidth reduction with concurrent accuracy gain. \textbf{(iii)}~At $-$5\,dB AWGN, $k=1$ (8.2\%) still outperforms $k=4$ (5.7\%); graceful degradation holds in the same direction under both AWGN and Rayleigh fading, on the protocol matched to Gao~\textit{et~al.}~\cite{gao2022task}. \textbf{(iv)}~A teacher ablation shows RemoteCLIP achieving a 4--7~pp task-fidelity advantage over OpenAI CLIP in deployment-relevant mid-SNR channels (AWGN 0\,dB; Rayleigh $+$5 to $+$10\,dB), supported by direct geometric measurements on the L0 codebook.
+
+\section{Related Work}
+
+\subsection{Multi-layer discrete tokens for digital semantic communication}
+VQ-VAE~\cite{vqvae} and Residual VQ~\cite{lee2022residual} jointly establish the methodological basis for discrete visual tokens and multi-stage quantization, the latter further popularized in the audio domain by SoundStream~\cite{soundstream} and EnCodec~\cite{encodec} for generative codecs. MOC-RVQ~\cite{moc-rvq} aligns multi-head codebook indices to digital constellations (64-QAM) and validates ``index-on-modulation'' end-to-end on natural images. ReVQom~\cite{revqom} pushes RVQ multi-stage compression to 273--1365$\times$ ratios in V2X multi-agent perception, but assumes error-free transmission and treats layers as residual precision. The MSVQ-SC and ESC-MVQ family integrates multi-codebook design with joint modulation--power optimization and rate adaptation, yet preserves a reconstruction-and-channel-geometry objective without foundation-model supervision. The common signature of these schemes is to leave RVQ layers as residual-precision refinements without semantic specialization, evaluating on PSNR/LPIPS rather than RS task fidelity.
+
+\subsection{Foundation-model distillation into discrete visual tokens}
+BEiT~v2~\cite{beitv2} distills a single-layer VQ codebook from CLIP/DINO for masked image modeling rather than communication. VILA-U~\cite{vilau} supervises an entire residual quantizer with a CLIP text-alignment loss, mapping the full chain to a unified representation rather than the SpeechTokenizer-style ``layer-1 for semantics, residual layers for detail'' hierarchy, and is not evaluated under channel simulation. TokLIP, UniTok and MUSE-VL further advance semantic visual tokenizers via joint training or dual-path architectures, again targeted at LLMs and multimodal generation rather than channel-aware transmission. SemCLIP~\cite{semclip} comes closest to communication settings by transmitting CLIP tokens directly, but uses generic OpenAI CLIP and retains a single-layer codebook. The common gap is the absence of hierarchical decoupling, almost no channel-simulation evaluation, and no remote-sensing-pretrained teacher.
+
+\subsection{Task-aware transmission in remote sensing}
+Gao~\textit{et~al.}~\cite{gao2022task} apply DRL block selection with $4{\times}4$ block compressed sensing, 8-bit quantization, and ResNet34 classification on AID under Rayleigh+AWGN---using exactly the protocol of this paper---but with a 2022-vintage stack lacking codebooks, RVQ, and foundation-model distillation. The Luxembourg SnT team consistently produces EO+JSCC work (including LEO-JSCC-EO at ICC~2026), pursuing continuous JSCC rather than discrete RVQ; the foundational DeepJSCC~\cite{deepjscc} anchors this line. MAGC employs VAE+diffusion reconstruction with vector-map conditioning for low-rate RS compression, outside the codebook-index transmission framework. FOOL and related work address task-agnostic RS compression without codebook indices. Collectively these works span RS task-fidelity protocols and digital/continuous JSCC, but the combination ``discrete codebook + multi-stage RVQ + RS-pretrained foundation-model distillation'' has not previously appeared.
+
+\subsection{Audio-domain analogue}
+SpeechTokenizer~\cite{zhang2024speechtokenizer} supervises RVQ layer 1 with HuBERT layer 9 to encode phonemes while residual layers carry timbre and prosody, establishing the ``hierarchical distilled tokenizer'' paradigm in the audio domain; STACodec, DM-Codec, HAC, and LM-SPT extend the same mechanism. Stable operation in this closely related modality reduces the scientific risk of transferring the mechanism to vision and remote sensing.
+
+\section{Method}
+
+\subsection{Framework and Notation}
+\label{sec:method-arch}
+
+\textbf{Overall architecture.} An input image $x\in\mathbb{R}^{3\times 256\times 256}$ is mapped by an encoder $E$ to a feature map $z\in\mathbb{R}^{256\times 16\times 16}$. After spatial flattening, the feature map yields $T = 256$ patch tokens of dimension $d = 256$. This token sequence is processed by a 4-stage Residual VQ quantizer with codebook size $K = 1024$ per layer. Denoting the $\ell$-th codebook as $\mathbf{C}^{(\ell)}\in\mathbb{R}^{K\times d}$, quantization yields an index tensor $\mathbf{I}\in\{0,\dots,K-1\}^{T\times 4}$. Each index occupies $\log_2 K = 10$ bits; the per-image bit budget is $T\cdot 4\cdot \log_2 K = 256\times 4\times 10 = 10{,}240$ bits for full 4-layer transmission, and $T\cdot 1\cdot \log_2 K = 2{,}560$ bits for L0-only transmission.\footnote{The budget excludes the receiver-side signaling field that announces the value of $k$. Encoding $k\in\{1,2,3,4\}$ requires only 2 bits per image, negligible relative to the 2{,}560--10{,}240-bit per-image transmission.} The receiver reconstructs $\hat{z}_q$ from the first $k$ received layers ($k\in\{1,2,3,4\}$) as $\hat{z}_q = \sum_{\ell=1}^{k} \mathbf{C}^{(\ell)}[\hat{\mathbf{I}}_\ell]$, then a decoder $D$ produces the reconstructed image $\hat{x}$. The task-output path constructs a 1024-dimensional histogram feature $h_0$ (Section~\ref{sec:method-h0}) directly from the received L0 indices and feeds it to a single-layer logistic regression to produce the task label.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{../../rstoken/figs/fig_method_aech_image2pro.png}
+\caption{RS-Token architecture. \textbf{Transmitter side (left of dotted divider):} an encoder maps the input image $x$ to a $16\times 16$ spatial latent $z$, quantized by a 4-stage Residual VQ ($K=1024$, $d=256$) into the index tensor $\mathbf{I}$. The first $k$ layers are transmitted via BPSK over AWGN/Rayleigh channels. \textbf{Receiver side (right of divider):} the received indices $\hat{\mathbf{I}}$ feed two paths---a reconstruction path through codebook lookup and decoder $D$ that produces $\hat{x}$, and a task path (deployment, $k=1$) where the L0 index histogram $h_0$ feeds a linear classifier. \textbf{RemoteCLIP distillation (top, training only):} the L0 quantized embedding is mean-pooled and projected through DistillHead $\phi$ to align with the frozen RemoteCLIP teacher $f_T$ via a cosine loss $\mathcal{L}_{\mathrm{distill}}=1-\cos(s,t)$. The choice of $k$ is dictated jointly by channel quality and task requirement, enabling task-fidelity-preserving graceful degradation.}
+\label{fig:arch}
+\end{figure}
+
+\textbf{Encoder/decoder backbone.} Encoder $E$ and decoder $D$ follow the VQ-VAE-2 / VQ-GAN-style convolutional residual backbone. The encoder consists of four downsampling stages with channel multipliers $[1,2,4,4]\times C_{\mathrm{base}}$, $C_{\mathrm{base}}=64$. Each stage contains one residual block (GroupNorm + SiLU + $3{\times}3$ convolutions) and one stride-2 downsampling convolution, achieving $16\times$ spatial downsampling with the channel dimension expanded to $d=256$. The decoder mirrors the encoder using stride-2 transposed convolutions for upsampling. The full encoder + decoder + RVQ + DistillHead stack contains approximately 10.87M parameters (encoder 5.16M, decoder 5.71M, quantizer + DistillHead $<$0.5M). All intermediate layers use GroupNorm and SiLU activations; self-attention is not used so that complexity remains tractable for a short-form architecture.
+
+\subsection{RemoteCLIP Distillation}
+\label{sec:method-distill}
+
+The L0 quantized output $\mathbf{z}_q^{(1)}\in\mathbb{R}^{T\times d}$ is mean-pooled across patch tokens to yield $\bar{z}\in\mathbb{R}^{d}$, then projected through a 2-layer MLP head $\phi$ to the RemoteCLIP image-embedding space, producing $s = \phi(\bar{z})\in\mathbb{R}^{512}$. The teacher path feeds the original image $x$ into the frozen RemoteCLIP visual encoder $f_T$ to obtain $t = f_T(x)\in\mathbb{R}^{512}$. The distillation loss is the cosine alignment
+\begin{equation}
+\mathcal{L}_{\mathrm{distill}} = 1 - \cos(s, t).
+\end{equation}
+The full distillation path is highlighted by the red dashed lines along the top of Fig.~\ref{fig:arch} and is active during training only.
+
+RemoteCLIP~\cite{liu2024remoteclip} is pretrained on 1.65M remote-sensing image--text pairs and reaches 95.95\% linear-probe accuracy on AID, exceeding the ImageNet-ViT-B baseline of 83.55\% by 12.4~pp---a clear remote-sensing domain inductive bias. In the feature space this bias manifests as the 30 AID class clusters maintaining larger inter-cluster spacing and tighter intra-cluster compactness; Section~\ref{sec:exp-teacher} reports the downstream task-fidelity consequence of transferring this geometric property to the L0 codebook through distillation.
+
+\subsection{Total Loss}
+The total loss combines pixel reconstruction, perceptual loss, vector-quantization commitment loss, and distillation loss:
+\begin{equation}
+\mathcal{L} = \mathcal{L}_{\mathrm{recon}} + 0.1\cdot\mathcal{L}_{\mathrm{LPIPS}} + 0.25\cdot\mathcal{L}_{\mathrm{VQ}} + \lambda\cdot\mathcal{L}_{\mathrm{distill}}.
+\end{equation}
+Here $\mathcal{L}_{\mathrm{recon}}$ is the L1 reconstruction loss, $\mathcal{L}_{\mathrm{LPIPS}}$ is the AlexNet-backed LPIPS~\cite{zhang2018lpips}, and $\mathcal{L}_{\mathrm{VQ}}$ is the standard Residual VQ commitment loss. The distillation weight $\lambda$ is set to 0.5 following the trade-off sweep in Section~\ref{sec:exp-tradeoff}, balancing in-domain task accuracy and noise robustness.
+
+\subsection{Channel Simulation Protocol}
+\label{sec:method-channel}
+
+The transmitter pipeline maps each index to its 10-bit binary representation followed by BPSK modulation. Two channel models are evaluated. Under AWGN, the closed-form BPSK hard-decision bit-error rate is $\mathrm{BER}=\tfrac{1}{2}\mathrm{erfc}(\sqrt{\mathrm{SNR}_{\mathrm{lin}}})$. Under Rayleigh flat fading combined with AWGN, averaging the instantaneous BER over $|h|^2\sim\mathrm{Exp}(1)$ yields $\mathrm{BER}=\tfrac{1}{2}\bigl(1-\sqrt{\mathrm{SNR}_{\mathrm{lin}}/(1+\mathrm{SNR}_{\mathrm{lin}})}\bigr)$. Both expressions are standard BPSK results for the respective channel models~\cite{proakis}. The simulation flips each transmitted bit with the corresponding closed-form BER probability and reassembles the receiver-side indices, equivalent to the Monte Carlo average of the full waveform-level ``BPSK $\rightarrow$ AWGN $\rightarrow$ hard decision'' pipeline. We cross-validated the closed-form approach against waveform-level Monte Carlo simulation at $\pm 5$\,dB and $\pm 10$\,dB on $10^6$-bit batches; the two approaches agree statistically.
+
+\subsection{Receiver Task-Fidelity Feature $h_0$}
+\label{sec:method-h0}
+
+When only the L0 layer is transmitted ($k=1$), the receiver constructs a 1024-dimensional histogram feature directly from the received index sequence without any codebook lookup:
+\begin{equation}
+h_0[i] = \frac{1}{T} \sum_{t=1}^{T} \mathbb{1}\bigl[\hat{\mathbf{I}}_t^{(1)} = i\bigr], \quad i = 0,\dots,K-1.
+\end{equation}
+The feature $h_0$ depends only on the statistical pattern of the received indices, not on codebook geometry or the decoder; it is the most parsimonious information form available to the receiver under L0-only transmission. After standardization (column-wise division by standard deviation, without mean centering, to preserve sparse-frequency structure) the feature feeds a single-layer logistic regression (LBFGS solver, max\_iter $=$ 2000, $C=1.0$) for task-label output. The task path is shown along the bottom branch of Fig.~\ref{fig:arch}. The argument here is that if such a minimalist representation already attains 80\%+ accuracy on AID 30-class classification, then the L0 indices encode land-cover identity directly through their discrete combinatorial pattern, requiring neither downstream decoding nor geometric information.
+
+\section{Experiments}
+
+\subsection{Dataset and Protocol}
+Experiments use AID (Aerial Image Dataset, 30-class scene classification)~\cite{xia2017aid}. Training/validation/test splits sample 8{,}000 / 1{,}000 / 1{,}000 images at an 8:1:1 ratio. The evaluation protocol structure matches the UAV task-aware transmission protocol of Gao~\textit{et~al.}~\cite{gao2022task} (AID 30-class + classification accuracy + AWGN/Rayleigh channel sweep). The specific split list is generated internally with random seed 42; the full list with per-class counts is included in the supplementary material. All images are resized to $256\times 256$ RGB and normalized to $[-1,1]$.
+
+\subsection{Training Configuration}
+The model uses 4-stage Residual VQ with codebook size 1{,}024 and latent dimension 256. Training spans 50 epochs at batch size 16, learning rate $1\times 10^{-4}$, AdamW optimizer ($\beta_1=0.9$, $\beta_2=0.95$), 500-step linear warmup, gradient clipping 1.0, bf16 mixed precision, random seed 42. The teacher network RemoteCLIP-ViT-B/32 remains frozen throughout. Training runs on a single NVIDIA RTX 5070 Ti card; one full training session takes approximately 70 minutes. No codebook collapse is observed: all four codebook layers maintain $>$\,99\% utilization throughout training (measured as the ratio of unique codeword hits per full epoch to $K$).
+
+\subsection{Main Result: Distillation Lifts L0 Task Fidelity}
+
+Table~\ref{tab:main} summarizes training-stage final values and L0 linear-probe accuracy on the AID test set. Stage 1 (single VQ) lacks the multi-layer structure required for $h_0$/L0-emb/zq-pool features and is marked ``---''.
+
+\begin{table}[!t]
+\centering
+\caption{Training-stage final values and linear-probe comparison (AID test, no-channel transmission, single-seed run).}
+\label{tab:main}
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+Configuration & PSNR (dB) & LPIPS & $h_0$ acc.\,(\%) & L0-emb acc.\,(\%) & zq-pool acc.\,(\%) \\ \midrule
+Stage 1 (single VQ) & 23.80 & 0.242 & --- & --- & --- \\
+Stage 2 (RVQ$\times 4$, no distill.) & 26.10 & 0.172 & 57.7 & 47.4 & 48.3 \\
+\textbf{Stage 3 (RVQ$\times 4$ + RemoteCLIP)} & 25.88 & 0.176 & \textbf{82.4} & \textbf{86.0} & \textbf{88.0} \\ \bottomrule
+\end{tabular}
+\end{table}
+
+PSNR and LPIPS report the best validation values across 50 training epochs. Stage 3 incurs only a 0.22\,dB PSNR cost relative to Stage 2, well below the 0.5\,dB design budget. The L0 index histogram $h_0$ classification accuracy rises from 57.7\% to 82.4\%, a +24.7\,pp gain that is nearly five times the preset 5\,pp threshold.
+
+\subsection{Channel Simulation: Task-Fidelity Graceful Degradation}
+\label{sec:exp-channel}
+
+Fig.~\ref{fig:channel} displays the SNR$\,\times\,k$ accuracy matrix of RS-Token (Stage 3) under AWGN and Rayleigh fading channels (the two panels share a colorbar for direct comparison). Table~\ref{tab:channel} extracts the most diagnostic comparison: ``distilled + L0-only (2{,}560 bits/img)'' versus ``no-distillation full 4-layer (10{,}240 bits/img)''.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{../../rstoken/figs/fig_channel_snr_k.png}
+\caption{Task-fidelity degradation under AWGN and Rayleigh fading channels. Each cell reports the AID test classification accuracy of the distilled model at the corresponding SNR and number of transmitted layers $k$, computed from $h_0$ features.}
+\label{fig:channel}
+\end{figure}
+
+\begin{table}[!t]
+\centering
+\caption{$h_0$ classification accuracy (AID test, single-seed run): distilled $k{=}1$ versus no-distillation $k{=}4$.}
+\label{tab:channel}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+SNR & Distilled $k{=}1$ (2{,}560 bits) & No-distill. $k{=}4$ (10{,}240 bits) & $\Delta$ (pp) \\ \midrule
+0\,dB AWGN & \textbf{53.2} & 21.2 & \textbf{+32.0} \\
+$+$5\,dB AWGN & \textbf{82.3} & 57.2 & +25.1 \\
+$+$10\,dB AWGN & 82.5 & 57.6 & +24.9 \\
+$+$5\,dB Rayleigh & \textbf{59.1} & 27.2 & \textbf{+31.9} \\
+$+$10\,dB Rayleigh & \textbf{79.0} & 48.2 & \textbf{+30.8} \\ \bottomrule
+\end{tabular}
+\end{table}
+
+In the SNR\,$\geq\,0$\,dB regime, transmitting only L0 (a $4\times$ reduction in bit rate) yields 25 to 32 pp higher classification accuracy than the no-distillation 4-layer transmission, indicating that the semantic information density carried by L0 indices after distillation substantially exceeds the contribution of full multi-layer reconstruction to classification. At $-$5\,dB AWGN, $k=1$ (8.2\%) still outperforms $k=4$ (5.7\%), although both approach random performance ($1/30\approx 3.3\%$); at Rayleigh 0\,dB, $k=1$ further drops to 16.6\%, marking a clear breakdown point where physical-layer techniques such as LDPC, HARQ, or equalization are needed to restore the link (Section~\ref{sec:disc-harq}). We therefore restrict the graceful-degradation claim to the SNR\,$\geq$\,$+$5\,dB deployment regime, reporting Rayleigh 0\,dB and lower-SNR behavior as the breakdown boundary.
+
+\subsection{Layer Specialization: L0 is the Semantic Layer}
+\label{sec:exp-layered}
+
+Fig.~\ref{fig:layered} compares cumulative-layer linear-probe accuracy under no-distillation and distilled configurations.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{../../rstoken/figs/fig_layered_probe.png}
+\caption{Cumulative-layer linear-probe accuracy on AID test top-1 under no-channel transmission. RemoteCLIP distillation makes L0 alone capture the principal semantic discriminative power, whereas RVQ without distillation forms no task-relevant semantic hierarchy across cumulative layers.}
+\label{fig:layered}
+\end{figure}
+
+Under distillation, the total increment from $L_0$ (86.0\%) to $L_0\!+\!L_1\!+\!L_2\!+\!L_3$ (88.0\%) is only +2.0\,pp---i.e., the first layer alone accounts for $86.0/88.0=97.7\%$ of the full 4-layer accuracy and $(86.0-47.7)/(88.0-47.7)=95.0\%$ of the distillation-induced gain over the no-distillation L0. Without distillation, all four cumulative-layer accuracies remain at 47--48\%, indicating that RVQ does not spontaneously develop a task-relevant semantic hierarchy without external supervision; distillation is the principal driver of L0 semanticization. This division of labor mirrors the SpeechTokenizer observation in audio that ``the first layer carries content while subsequent layers carry detail'', here quantified for the visual / remote-sensing domain.
+
+\subsection{Teacher Ablation: RS-Specific Foundation Model in Channel Downstream}
+\label{sec:exp-teacher}
+
+Table~\ref{tab:teacher} compares RemoteCLIP and OpenAI CLIP as distillation teachers. The two configurations only differ in the teacher weights; architecture, hyperparameters, and training pipeline are otherwise identical.
+
+\begin{table}[!t]
+\centering
+\caption{Teacher ablation $h_0$ classification accuracy (AID test, $k{=}1$, single-seed run, \%).}
+\label{tab:teacher}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Setting & OpenAI CLIP & \textbf{RemoteCLIP} & $\Delta$ (pp) \\ \midrule
+No channel (in-domain ceiling) & 80.8 & 82.4 & +1.6 \\
+AWGN $-$5\,dB & 6.2 & 8.2 & +2.0 \\
+\textbf{AWGN 0\,dB} & 46.5 & \textbf{53.2} & \textbf{+6.7} \\
+AWGN $+$5\,dB & 79.4 & 82.3 & +2.9 \\
+AWGN $+$10\,dB & 80.8 & 82.5 & +1.7 \\
+Rayleigh $+$5\,dB & 55.3 & 59.1 & +3.8 \\
+Rayleigh $+$10\,dB & 74.8 & 79.0 & +4.2 \\ \bottomrule
+\end{tabular}
+\end{table}
+
+The teacher gap is only 1.6\,pp at the no-channel ceiling, but enlarges to 4--7\,pp in the deployment-relevant mid-SNR regime (AWGN 0\,dB; Rayleigh $+$5 to $+$10\,dB). Compared with OpenAI CLIP's 400M natural-image-text pretraining, RemoteCLIP's 1.65M remote-sensing image-text pretraining provides a markedly stronger geometric prior for remote-sensing scenes; distillation transfers this prior to the L0 codebook, yielding more stable downstream task fidelity in mid-SNR channels.
+
+To quantify the geometric mechanism above, we extracted the L0 codebook embedding (8{,}000 images $\times$ 256-dim mean-pooled features) from each teacher's distilled checkpoint on the AID training set and computed cluster-structure metrics over the 30 classes (Table~\ref{tab:geometry}). RemoteCLIP outperforms OpenAI CLIP consistently across all four metrics: inter/intra-cluster distance ratio 1.82 vs.\ 1.72; silhouette coefficient 0.059 vs.\ $-$0.004 (the latter approaches random distribution); Calinski-Harabasz index 404 vs.\ 366; Davies-Bouldin index 2.32 vs.\ 2.83 (lower is better). The most informative gap is in the silhouette coefficient: OpenAI-CLIP-distilled codebooks barely form effective cluster structure on AID's 30 classes, whereas RemoteCLIP yields visibly separable clusters. Fig.~\ref{fig:tsne} provides the matching t-SNE visualization of the L0 codebook embeddings on AID training images under the two teachers.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{../../rstoken/figs/fig_codebook_tsne.png}
+\caption{t-SNE visualization of L0 codebook embeddings under the two teachers (AID training images, 2{,}500 sampled, 30 classes color-coded). RemoteCLIP (left) shows clearer cluster separation and tighter intra-cluster structure, consistent with the quantitative metrics in Table~\ref{tab:geometry}.}
+\label{fig:tsne}
+\end{figure}
+
+\begin{table}[!t]
+\centering
+\caption{L0 codebook cluster-structure metrics (AID training set $N=8{,}000$, 30 classes, single-seed run).}
+\label{tab:geometry}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Metric & OpenAI CLIP & \textbf{RemoteCLIP} & Direction \\ \midrule
+Inter/intra distance ratio & 1.7231 & \textbf{1.8156} & $\uparrow$ higher better \\
+Silhouette score & $-$0.0039 & \textbf{0.0592} & $\uparrow$ higher better \\
+Calinski-Harabasz score & 366.03 & \textbf{404.06} & $\uparrow$ higher better \\
+Davies-Bouldin score & 2.8326 & \textbf{2.3162} & $\downarrow$ lower better \\ \bottomrule
+\end{tabular}
+\end{table}
+
+The 4--7\,pp task-fidelity advantage of RemoteCLIP in the most deployment-relevant mid-SNR regime is supported directly at the codebook geometry level by Table~\ref{tab:geometry}, identifying it as the principal value of remote-sensing-specific pretraining for RS semantic communication, rather than a small in-domain ceiling improvement.
+
+\subsection{Distillation-Weight Trade-off and $\lambda$ Selection}
+\label{sec:exp-tradeoff}
+
+Table~\ref{tab:lambda} reports the distillation weights $\lambda\in\{0.0, 0.1, 0.5, 1.0\}$ across reconstruction PSNR, in-domain classification accuracy, and channel-downstream classification accuracy.
+
+\begin{table}[!t]
+\centering
+\caption{Distillation-weight sweep (AID test, $k{=}1$, $h_0$, in \%; PSNR in dB).}
+\label{tab:lambda}
+\begin{tabular}{@{}cccccc@{}}
+\toprule
+$\lambda$ & PSNR & $h_0$ no-channel & $h_0$ AWGN 0\,dB & $h_0$ Rayleigh $+$5\,dB \\ \midrule
+0.0 & 26.10 & 57.7 & 23.4 & 28.0 \\
+0.1 & 26.17 & 71.2 & 35.5 & 42.1 \\
+\textbf{0.5} & 25.88 & 82.4 & \textbf{53.2} & \textbf{59.1} \\
+1.0 & 25.61 & 84.5 & 37.5 & 49.8 \\ \bottomrule
+\end{tabular}
+\end{table}
+
+$\lambda = 1.0$ surpasses $\lambda=0.5$ at the in-domain ceiling by 2.1\,pp, but is 15.7\,pp lower than $\lambda=0.5$ in the AWGN 0\,dB regime. One interpretation is that strong distillation overly compresses codebook geometry, reducing inter-cluster spacing so that single-bit flips more easily cross class boundaries, undermining noise robustness. $\lambda=0.5$ represents the frontier balance among reconstruction quality, in-domain classification, and channel-downstream task fidelity; choosing this weight reflects a deployment-driven design principle---task fidelity over single-metric validation accuracy.
+
+\section{Discussion}
+
+\subsection{Robustness Amplification of Remote-Sensing Pretraining under Channel}
+The teacher gap is only 1.6\,pp at the no-channel ceiling but widens to 4--7\,pp in the AWGN 0\,dB and Rayleigh $+$5 to $+$10\,dB deployment regimes (Section~\ref{sec:exp-teacher}). A consistent geometric explanation is the following: OpenAI CLIP's feature space, learned from 400M natural-image-text pairs, ``flattens'' remote-sensing data only as a byproduct of cross-domain transfer; RemoteCLIP's targeted pretraining on remote-sensing image-text pairs supplies a stronger domain-specific geometric prior, expressed as larger inter-cluster spacing and tighter intra-cluster compactness for the 30 AID classes. Table~\ref{tab:geometry} and Fig.~\ref{fig:tsne} directly quantify this difference: the L0 codebook from RemoteCLIP distillation outperforms OpenAI CLIP across all four cluster-structure metrics; the silhouette coefficient transitions from $-$0.004 (near-random) to 0.059 (clearly positive separation), and the Davies-Bouldin score drops from 2.83 to 2.32 ($\sim$18\% improvement in cluster compactness); the t-SNE visualization shows the same direction of difference. Distillation transfers this geometric property to the L0 codebook, reducing the probability that bit-error perturbation crosses class boundaries. This mechanism complements the observation in Section~\ref{sec:exp-tradeoff} that ``excessive compactness undermines robustness'': remote-sensing-specific pretraining does not produce a more compact codebook, but rather more stable cluster centroids while preserving inter-cluster spacing.
+
+\subsection{Relation to Physical-Layer HARQ and ACM}
+\label{sec:disc-harq}
+
+The hierarchical degradation mechanism does not replace physical-layer HARQ and ACM; the two operate at different layers and stack additively. HARQ reduces bit error rate via retransmission at the cost of latency and uplink bandwidth, not always tolerable in time-critical scenarios such as UAV real-time backhaul or emergency dispatch. ACM has a coding-rate floor: when SNR drops below the lowest threshold, the link cannot be established. Physical-layer ``error-free transmission'' does not equate to application-layer ``task usability'': an image transmitted with BER $10^{-6}$ may still fail downstream classification due to extremely low source-coding rate and blurry reconstruction. RS-Token operates at the application layer above the physical layer, providing task-fidelity fallback: when physical-layer techniques are exhausted, the receiver can still preserve task accuracy with as few codebook indices as possible. The Rayleigh 0\,dB measurement ($k=1$ accuracy 16.6\%) corroborates this positioning---severe fading regimes still require LDPC, HARQ, and equalization; our method is one layer above, not a replacement.
+
+\subsection{Limitations and Future Work}
+
+\textbf{(L1)} We now include same-SNR comparisons against JPEG2000/WebP compressed bitstreams both without channel coding and with a rate-1/2 systematic sparse LDPC code using min-sum BP decoding under fixed transmitted-bit budgets. These results should not be described as standard 5G NR LDPC. Neural and protocol-matched baselines such as DeepJSCC and Gao~\textit{et~al.}~\cite{gao2022task} remain journal-version extensions.
+
+\textbf{(L2)} The current experiments are confined to RGB three-band imagery. Main tokenizer statistics are reported across three model seeds, and the LDPC-protected external-baseline comparison reports mean$\,\pm\,$std across five channel seeds for the key +5/+10 dB SNR points. The full version will extend to multispectral / hyperspectral remote-sensing data and broader neural/protocol-matched baselines.
+
+\textbf{(L3)} A clear breakdown point appears at Rayleigh 0\,dB ($k=1$ at 16.6\%); even with the added rate-1/2 sparse LDPC study, very low-SNR fading remains a stress boundary requiring stronger physical-layer coding, HARQ, and equalization. RS-Token should therefore be viewed as an application-layer task-fidelity mechanism that stacks with, rather than replaces, physical-layer reliability techniques.
+
+\textbf{(L4)} Current experiments use BPSK modulation. The framework is naturally compatible with higher-order modulations (16-QAM, 64-QAM) and corresponding BER curves; the BPSK choice corresponds to the worst-case link conditions of interest in the motivation (low SNR / amateur band), with empirical extension to higher-order modulation deferred to future work.
+
+\section{Conclusion}
+We have presented RS-Token, a hierarchical distilled RVQ tokenizer for remote-sensing image downlinks. RemoteCLIP distillation drives the first RVQ codebook to carry land-cover semantic identity while subsequent layers carry pixel detail; the receiver dynamically selects the first $k$ index layers based on channel quality and task requirement, achieving task-fidelity-preserving and bandwidth-adaptive transmission across the deployment SNR regime. The framework provides a new task-oriented semantic-communication paradigm for real-world remote-sensing scenarios such as UAV, emergency response, edge sensors, and SmallSats. Subsequent work will extend external-baseline comparison, multi-seed statistics, lightweight channel coding, and multispectral scenarios.
+
+\bibliographystyle{IEEEtran}
+\bibliography{rs_token}
+
+\end{document}

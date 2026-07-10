@@ -1,0 +1,475 @@
+﻿%% rs_token_v0.5.tex -- RS-Token manuscript v0.5 (2026-06-09)
+%% Compile: pdflatex rs_token_v0.5.tex; bibtex rs_token_v0.5; pdflatex rs_token_v0.5.tex; pdflatex rs_token_v0.5.tex
+
+\documentclass[lettersize,journal]{IEEEtran}
+
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{hyperref}
+\usepackage{cite}
+\usepackage{url}
+
+\hyphenation{op-tical net-works semi-conduc-tor IEEE-Xplore}
+
+\begin{document}
+
+\title{RS-Token: Hierarchical RemoteCLIP-Distilled Tokens for Channel-Robust Remote Sensing Communication}
+
+\author{Baohui~Zhang,
+        and~Jianwei~Tai,~\IEEEmembership{Member,~IEEE}%
+\thanks{B. Zhang and J. Tai are with the School of Internet, Anhui University, Hefei 230601, China (e-mail: y125211005@ahu.edu.cn; taijianwei@ahu.edu.cn).}%
+\thanks{\textit{Corresponding author: Jianwei Tai.}}%
+}
+
+\markboth{IEEE Geoscience and Remote Sensing Letters,~Vol.~XX, No.~XX, June~2026}%
+{Zhang \MakeLowercase{\textit{and~Tai}}: RS-Token for Remote Sensing Communication}
+
+\maketitle
+
+\begin{abstract}
+Remote-sensing downlinks face limited bandwidth, low SNR, and fading, while receivers may need a scene label, low-rate task image, or faithful reconstruction. We present \textbf{RS-Token}, which pairs a four-stage residual vector quantizer (RVQ) with RemoteCLIP distillation on the first layer only: L0 carries land-cover semantics, L1--L3 refine reconstruction. The receiver transmits a prefix of $k$ layers (2{,}560--10{,}240~bits/image on AID), and task and reconstruction paths are evaluated separately. Across three model seeds, distillation lifts no-channel L0 accuracy from $58.23\pm1.57\%$ to $83.33\pm0.81\%$, holding $82.57\pm0.31\%$ at AWGN $+5$~dB and $78.80\pm0.72\%$ at Rayleigh $+10$~dB; reconstruction improves from $22.98\pm0.09$~dB / $71.4\pm1.3\%$ at $k=1$ to $25.92\pm0.08$~dB / $86.8\pm0.4\%$ at $k=4$. A layer-target counterfactual fixes L0-only as a measured optimum: all-layer supervision dilutes L0, and L1-only collapses $h_0$ by 48~pp. RemoteCLIP gives a modest 1.4--6.0~pp $h_0$ advantage over OpenAI CLIP, mainly under fading. Zero-shot transfer to NWPU-RESISC45 preserves the distillation gain (25.1~pp on AID, 20.9~pp on NWPU). At matched transmitted-bit budgets, RS-Token attains $0\%$ decode-failure while a rate-1/2 LDPC-protected codec pipeline (JPEG2000, WebP) fails on 60--100\% of images. Deployment uses 10.87~M parameters and 8.59~ms GPU inference per image; the RemoteCLIP teacher ($\sim$150~M params) is training-only.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Semantic communication, remote sensing, residual vector quantization, RemoteCLIP, task-oriented communication, hierarchical tokens, channel robustness.
+\end{IEEEkeywords}
+
+\section{Introduction}
+\IEEEPARstart{R}{emote-sensing} image communication is increasingly used in low-altitude UAV inspection and emergency scene screening~\cite{gao2022task}. In such settings, the downlink can be unstable because of range variation, occlusion, multipath fading, and temporary communication constraints. At the same time, the receiver does not always need a full-fidelity image immediately. Some real-time alerting tasks only need a reliable scene-level decision; field assessment may need an approximately interpretable image; later mapping, archiving, or manual review may require a higher-quality reconstruction. Remote-sensing communication therefore benefits from a hierarchical representation: at low rate, it should preserve task-relevant semantics, and when more bits can be transmitted, it should progressively recover image details.
+
+Traditional image communication usually follows a compress-then-transmit pipeline. The sender encodes the image into a compressed bitstream, and the receiver decodes the image after recovering the bitstream. This paradigm is mature, but it does not directly match the hierarchical information demand above. On one hand, compressed bitstreams such as WebP or JPEG2000 can be sensitive to uncorrected bit errors, which may cause severe distortion or decoding failure. On the other hand, conventional compression primarily optimizes visual reconstruction and does not explicitly guarantee that the earliest transmitted bits preserve remote-sensing scene semantics. Channel coding can reduce bit errors, but it does not by itself change the source representation's semantic ordering. Joint source--channel coding (JSCC) is an alternative that learns a channel-adapted representation directly~\cite{deepjscc}, but its output is typically continuous and does not naturally support the discrete, layerable token structure we require.
+
+A natural alternative is to transmit the discrete indices of a neural tokenizer, such as VQ~\cite{vqvae} or RVQ~\cite{lee2022residual} indices. Compared with conventional compressed files, discrete indices are easier to combine with digital channels, retransmission, and error protection, and RVQ naturally supports layer-wise transmission~\cite{moc-rvq}. However, a standard RVQ tokenizer is usually driven by reconstruction losses. Its first codebook mainly approximates a continuous latent at a coarse level and is not guaranteed to be discriminative for remote-sensing scene categories. Thus, plain RVQ index transmission provides a layered rate structure, but it does not necessarily provide low-rate task-semantic fidelity.
+
+RS-Token introduces RemoteCLIP~\cite{liu2024remoteclip} distillation into this layered RVQ representation to explicitly change the role of the first token layer. The distillation loss is applied only to L0-derived features, aligning them with a remote-sensing vision-language embedding. L1--L3 continue to encode residual information for reconstruction. The same tokenizer can therefore support prefix transmission: the receiver chooses the first $k$ RVQ index layers according to channel condition and task demand. The bit cost is determined by the token grid, codebook size, and number of transmitted layers. In the present AID configuration, $k=1,2,3,4$ correspond to 2{,}560, 5{,}120, 7{,}680, and 10{,}240 bits/image, respectively.
+
+The evidence chain of this paper is organized as follows. First, RS-Token is compared with an internal plain-RVQ index baseline (\texttt{rvq\_baseline}), which shares the same architecture but receives no RemoteCLIP distillation, to test whether distillation makes L0 more semantic. Second, a distillation-placement counterfactual tests whether the L0 specialization is caused by where the RemoteCLIP loss is attached or is an architectural accident of the first residual layer. Third, reconstruction-path results evaluate whether increasing $k$ improves PSNR, LPIPS, and reconstructed-image classifier accuracy. In addition, the paper reports a strict same-transmitted-bit stress comparison against rate-1/2 systematic sparse LDPC-protected WebP/JPEG2000 pipelines, and a zero-shot transfer of the L0 tokenizer to NWPU-RESISC45.
+
+The contributions are:
+\begin{itemize}
+    \item We propose a RemoteCLIP-guided L0 semantic allocation mechanism for a four-layer RVQ tokenizer, where only the first layer is distilled to carry remote-sensing scene semantics and later layers are left for progressive reconstruction.
+    \item We formulate prefix-style RVQ index transmission for remote-sensing images. The concrete bit costs are configuration-dependent; in our AID setup, the four prefixes use 2{,}560, 5{,}120, 7{,}680, and 10{,}240 bits/image.
+    \item We establish a separated evaluation protocol: $h_0$/L0 bag-of-words accuracy for the $k=1$ task path, and PSNR, LPIPS, plus a clean AID ResNet34 evaluator for the reconstruction path.
+    \item We validate, on AID under AWGN and Rayleigh channels, that RemoteCLIP distillation substantially improves L0 task accuracy over plain RVQ index transmission, while additional RVQ layers improve reconstruction when the channel can support them.
+\end{itemize}
+\section{Related Work}
+\subsection{Task-Oriented Remote-Sensing Communication}
+Task-oriented semantic communication optimizes transmission for downstream decisions rather than for pixel fidelity alone. Early Deep JSCC work~\cite{deepjscc} showed that end-to-end learned image coding can substantially outperform compress-then-transmit pipelines under noisy channels. Remote-sensing applications are a natural target because scene classification, object monitoring, and emergency screening often tolerate partial visual information if the class-relevant semantics are preserved. Prior work on UAV or remote-sensing semantic communication has demonstrated that task accuracy can remain high at lower rates than conventional image reconstruction systems~\cite{gao2022task}. More recent work also explores using multimodal foundation models as zero-shot semantic priors for communication~\cite{semclip}, and digital pipelines that combine multilevel codebooks with generative semantic communication~\cite{moc-rvq}. RS-Token differs by keeping a discrete, layered representation whose first layer is deliberately aligned to a remote-sensing foundation model and whose later layers are reserved for reconstruction detail.
+
+\subsection{Discrete Visual Tokens and Residual Quantization}
+Vector-quantized autoencoders introduced discrete latent image tokens as a compact neural representation~\cite{vqvae}. Residual vector quantization extends this idea by representing a latent with multiple codebooks, where later codebooks encode residual errors left by earlier ones~\cite{lee2022residual}. RVQ is widely used in neural audio codecs such as SoundStream and EnCodec~\cite{soundstream,encodec}, where progressive codebooks naturally define operating points; the same hierarchical-token principle has also been extended on the speech side by SpeechTokenizer, which explicitly separates semantic from acoustic layers~\cite{zhang2024speechtokenizer}. On the vision side, recent work such as VILA-U explores using the same discrete tokens jointly for understanding and generation~\cite{vilau}, and the communication side has begun to use RVQ as a perception-transmission bottleneck in multi-agent settings~\cite{revqom}. RS-Token adapts this layered-token principle to remote-sensing communication and adds a teacher-guided semantic constraint on the first layer.
+
+\subsection{Foundation-Model Distillation}
+Vision-language foundation models provide semantically structured embeddings that can supervise compact representations. On the generic-vision side, BEiT v2 has shown that distilling foundation-model visual features (e.g., CLIP visual-encoder outputs) into a VQ tokenizer makes the discrete tokens more semantically discriminative~\cite{beitv2}. RemoteCLIP is trained for remote-sensing image-text alignment and provides a domain-specific embedding space for land-cover semantics~\cite{liu2024remoteclip}. Instead of distilling a generic visual representation into all latent layers, RS-Token distills RemoteCLIP only into L0-derived features. This localized distillation is important because the communication objective is hierarchical: the first layer should support robust task inference, while the remaining layers should remain available for reconstruction refinement.
+
+\subsection{Conventional and Coded Baselines}
+Conventional image codecs such as WebP and JPEG2000 are strong engineering baselines for clean image storage. In a noisy digital channel, however, an unprotected compressed bitstream may fail catastrophically because the decoder expects a syntactically valid file. Channel coding can mitigate this failure mode~\cite{proakis}, but the exact code matters; joint source--channel coding offers a different design path from compress-then-correct~\cite{deepjscc}. In this paper, WebP/JPEG2000 results are described only as unprotected compressed bitstreams over a BPSK channel. The LDPC experiment is described separately as a rate-1/2 systematic sparse LDPC code with min-sum belief-propagation decoding; it is not a 5G NR LDPC implementation and is not used to claim comparison against a standardized cellular code.
+
+\section{Method}
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=0.96\textwidth]{../../rstoken/figs/fig_method_aech_image2pro.png}
+\caption{Overall RS-Token framework. The transmitter encodes an input remote-sensing image into four RVQ index layers. Deployment transmits a prefix of the indices, while RemoteCLIP teacher supervision and the distillation head are used only during training. The receiver can either use an L0-derived task representation or decode the received prefix for reconstruction.}
+\label{fig:method_overall}
+\end{figure*}
+
+\subsection{Problem Setting}
+Let $x\in\mathbb{R}^{H\times W\times3}$ be a remote-sensing image and $y$ its scene class. The transmitter maps $x$ to a hierarchy of discrete indices $z_{1:K}=\{z_1,\ldots,z_K\}$ with $K=4$. Each layer has the same spatial token grid and contributes 2{,}560 bits/image in the present implementation. A receiver may request the prefix $z_{1:k}$ according to channel quality and application demand:
+\begin{equation}
+    B(k)=2560k, \quad k\in\{1,2,3,4\},
+\end{equation}
+which gives 2{,}560, 5{,}120, 7{,}680, and 10{,}240 bits/image. The $k=1$ setting is the task-oriented low-rate mode; larger $k$ values are reconstruction-refinement modes.
+
+\subsection{Hierarchical RVQ Encoder--Decoder}
+The encoder $E_\theta$ maps an image to a continuous latent tensor $u=E_\theta(x)$. A residual vector quantizer then approximates $u$ by a sum of codebook embeddings, following the residual update of~\cite{lee2022residual,soundstream}:
+\begin{align}
+    r_0 &= u, \\
+    z_\ell &= \arg\min_j \|r_{\ell-1}-c_{\ell,j}\|_2^2, \\
+    q_\ell &= c_{\ell,z_\ell}, \\
+    r_\ell &= r_{\ell-1}-q_\ell,
+\end{align}
+for $\ell=1,\ldots,4$. Given a prefix of $k$ layers, the decoder reconstructs
+\begin{equation}
+    \hat{x}_k = D_\phi\left(\sum_{\ell=1}^{k} q_\ell\right).
+\end{equation}
+This prefix property is what allows one trained model to support multiple transmission rates.
+
+\subsection{RemoteCLIP Distillation on L0}
+The central design choice is to align only the first quantization layer with a remote-sensing semantic teacher. Let $f_T(x)$ denote the normalized RemoteCLIP image embedding~\cite{liu2024remoteclip}, and let $g_\psi(q_1)$ denote a projection from the L0 quantized representation to the teacher feature dimension. The distillation term is
+\begin{equation}
+    \mathcal{L}_{\rm distill}=1-\frac{g_\psi(q_1)^\top f_T(x)}{\|g_\psi(q_1)\|_2\|f_T(x)\|_2}.
+\end{equation}
+The total training objective combines reconstruction, perceptual/codebook regularization, and L0 distillation:
+\begin{equation}
+    \mathcal{L}=\mathcal{L}_{\rm rec}+\mathcal{L}_{\rm vq}+\lambda\mathcal{L}_{\rm distill}.
+\end{equation}
+The main model uses $\lambda=0.5$, selected from a distillation-weight sweep (Table~\ref{tab:lambda_sweep}) that exposes a trade-off between no-channel semantic accuracy and fading robustness. The no-distillation internal baseline sets $\lambda=0$ while preserving the same architecture and training protocol.
+
+\subsection{Channel Model and Metrics}
+\textbf{Channel model.} Let the prefix-$k$ RVQ index bitstream be $\mathbf{b}\in\{0,1\}^{B(k)}$. BPSK modulation maps each bit to a real symbol $s_i = 1 - 2 b_i \in \{+1,-1\}$. At the receiver, the $i$-th sample is
+\begin{equation}
+    y_i = h_i\, s_i + n_i, \qquad n_i \sim \mathcal{CN}(0,\sigma^2),
+\end{equation}
+where $h_i \equiv 1$ for AWGN and $h_i \sim \mathcal{CN}(0,1)$ i.i.d.\ per symbol for Rayleigh fading~\cite{proakis}. The signal-to-noise ratio is $\mathrm{SNR}=1/\sigma^2$ (in dB form, $10\log_{10}(1/\sigma^2)$). Bits are recovered by coherent hard decision,
+\begin{equation}
+    \hat{b}_i = \tfrac{1}{2}\bigl(1 - \mathrm{sgn}\bigl(\mathrm{Re}\{h_i^{*} y_i\}\bigr)\bigr),
+\end{equation}
+and then re-grouped into indices $\hat{z}_{1:k}$ according to the per-layer codebook size. No error-correcting code is inserted in this section; Section~IV-D adds the same rate-1/2 LDPC protection on both RS-Token and the conventional codecs in a fair, separately reported comparison.
+
+\textbf{Task-path evaluation.} Let codebook size at layer $\ell$ be $C_\ell$, and let $\hat{z}_\ell^{(t)}\in\{0,\ldots,C_\ell-1\}$ be the received layer-$\ell$ index at spatial token position $t$, with token-grid size $T = 16\times 16 = 256$. The L0 bag-of-words feature is the normalized histogram of L0 codeword usage,
+\begin{equation}
+    h_{0,j} = \frac{1}{T}\sum_{t=1}^{T} \mathbf{1}\!\bigl[\hat{z}_1^{(t)} = j\bigr], \quad j=0,\ldots,C_1-1,
+\end{equation}
+giving $\mathbf{h}_0\in\mathbb{R}^{C_1}$ ($C_1 = 1024$ in this paper). A linear classifier $W$ trained on $\mathbf{h}_0$ predicts $\hat{y} = \arg\max_c (W\mathbf{h}_0)_c$ for 30-class AID scene classification, and the task-path accuracy is $\mathbb{E}[\mathbf{1}[\hat{y}=y]]$. This metric is intentionally limited to $k=1$ because it measures the semantic content of L0, not the visual quality of reconstructions produced by higher layers.
+
+\textbf{Reconstruction-path evaluation.} Given received indices $\hat{z}_{1:k}$, the decoder outputs the reconstruction $\hat{x}_k = D_\phi\!\bigl(\sum_{\ell=1}^{k} c_{\ell, \hat{z}_\ell}\bigr)$. PSNR is computed in the $[0,1]$-normalized pixel domain,
+\begin{equation}
+    \mathrm{PSNR}(x,\hat{x}_k) = 10\log_{10}\frac{1}{\mathrm{MSE}(x,\hat{x}_k)},
+\end{equation}
+\begin{equation}
+    \mathrm{MSE}(x,\hat{x}_k) = \frac{1}{3HW}\|x-\hat{x}_k\|_2^2.
+\end{equation}
+LPIPS uses the AlexNet-backbone default of~\cite{zhang2018lpips}. The reconstructed-image classification accuracy uses a clean AID ResNet34 classifier $f_{\mathrm{cls}}$,
+\begin{equation}
+    \mathrm{Acc}_{\mathrm{recon}}(k) = \mathbb{E}\bigl[\mathbf{1}\!\bigl[\arg\max f_{\mathrm{cls}}(\hat{x}_k) = y\bigr]\bigr],
+\end{equation}
+where $f_{\mathrm{cls}}$ is trained separately on clean AID images and reaches $96.10\%$ test top-1 accuracy and $95.94\%$ macro-F1, providing a stable proxy for whether reconstructions preserve scene-recognition cues. These reconstruction-path metrics, not $\mathbf{h}_0$, support all $k=2\ldots 4$ claims.
+
+\section{Experiments}
+This section is organized around five questions. First, we ask whether RemoteCLIP distillation makes L0 more semantic. Second, we test whether the L0 specialization is caused by the placement of the distillation loss or is an architectural accident of the first residual layer. Third, we evaluate whether transmitting more RVQ layers improves reconstruction. Fourth, we ask how the failure modes of RS-Token and codec+LDPC pipelines differ under matched transmitted bits. Fifth, we ask whether the AID-trained L0 tokenizer transfers zero-shot to a different RS scene benchmark. Each subsection follows a problem--setting--result--conclusion structure. Unprotected WebP/JPEG2000 over BPSK is reported alongside as an external stress test.
+
+To avoid metric mixing, we separate the evaluation into a task path, a layered probe, and a reconstruction path. The task path uses only $h_0$/L0 bag-of-words accuracy and supports only the $k=1$ low-rate semantic claim. The layered probe uses cumulative codeword embeddings to analyze the semantic division between L0 and L1--L3. The reconstruction path uses PSNR, LPIPS, and a clean AID ResNet34 reconstructed-image classifier, and supports the $k=1\ldots4$ reconstruction claims. In other words, $h_0$/L0 bag-of-words accuracy and the layered probe are not used as evidence for multi-layer reconstruction quality, and PSNR/LPIPS alone are not used as evidence that L0 is semantic.
+
+\subsection{Experimental Setup}
+All experiments use the AID aerial scene dataset with 30 classes~\cite{xia2017aid}, with a fixed per-class stratified train/validation/test split of 8{,}000/1{,}000/1{,}000 samples (80\%/10\%/10\%); all 30 classes appear in every split. Per-class counts are 176--336 images per class in train (mean 266.7) and 22--42 images per class in each of val and test (mean 33.3). The split CSVs are bundled with the artifact at \texttt{data/AID\_splits/}. Training uses RandomResizedCrop(256), while evaluation uses Resize and CenterCrop(256), with image normalization matching the training scripts. RS-Token uses a four-layer RVQ tokenizer with $256\times256$ RGB input, a $16\times16$ latent token grid, latent dimension 256, and codebook size 1024. Each layer therefore contains 256 discrete symbols, each represented by $\log_2(1024)=10$ bits. The per-layer payload is 2{,}560 bits/image, giving 2{,}560, 5{,}120, 7{,}680, and 10{,}240 bits/image for $k=1,2,3,4$.
+
+The internal tokenizer comparison uses two model families: \texttt{rvq\_baseline}, a four-layer RVQ tokenizer trained only with reconstruction and RVQ quantization losses, and \texttt{rvq\_distill}, the same architecture and transmission protocol with the L0 RemoteCLIP distillation term defined in Section~III. Both use batch size 16, AdamW, learning rate $10^{-4}$, 50 epochs, gradient clipping, and bf16 automatic mixed precision. The loss weights for $\ell_1$, LPIPS~\cite{zhang2018lpips}, RVQ, and distillation are $1$, $0.1$, $1$, and $0.5$, respectively; LPIPS uses an AlexNet backbone. The teacher is a frozen RemoteCLIP-ViT-B/32~\cite{liu2024remoteclip}, and the distillation projection head $g_\psi$ uses a hidden dimension of 512.
+
+For the task path, we build a 1024-dimensional bag-of-words feature $h_0$ from the received L0 indices and train a linear classifier for AID scene classification. For the reconstruction path, we decode reconstructed images from the received prefix of $k$ RVQ layers and report PSNR, LPIPS, and the accuracy of a clean AID ResNet34 classifier on reconstructed images. Unless otherwise stated, the main task-path results report mean $\pm$ standard deviation over model seeds 41/42/43, while reconstruction-path sweeps use the main configuration reported in the experiment logs. Channel experiments convert RVQ index bits to BPSK symbols, transmit them through AWGN or Rayleigh channels~\cite{proakis}, and recover indices by hard decisions at the receiver.
+
+\subsection{Does RemoteCLIP Distillation Make L0 Semantic?}
+\textbf{Problem.} The central RS-Token hypothesis is that L0 should remain useful for scene-level decisions when only the lowest-rate layer is transmitted. A plain RVQ tokenizer also produces L0 indices~\cite{lee2022residual}, but because it is driven by reconstruction losses, its first codebook is not guaranteed to be discriminative for AID scene categories. This experiment asks whether RemoteCLIP~\cite{liu2024remoteclip} distillation significantly improves L0 task fidelity under the same RVQ-index transmission framework.
+
+\textbf{Setting.} We compare \texttt{rvq\_baseline} and \texttt{rvq\_distill}. The only intended difference is the L0 RemoteCLIP distillation term; tokenizer architecture and index transmission are otherwise kept the same. The task path uses only received L0 indices to build $h_0$/L0 bag-of-words features, followed by a linear probe for 30-class AID scene classification. This metric corresponds only to the $k=1$ low-rate task path and is not used to support reconstruction claims for $k=2\ldots4$. Table~\ref{tab:task_seed} reports mean $\pm$ standard deviation over three model seeds and includes best PSNR/LPIPS only as training-quality references, not as the main evidence for L0 semantics.
+
+\begin{table}[!t]
+\centering
+\caption{Task-path stability across three model seeds. Accuracy is $h_0$/L0 bag-of-words top-1 accuracy in percent and is used only for $k=1$ task-path claims.}
+\label{tab:task_seed}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Metric & No distillation & RemoteCLIP distillation \\
+\midrule
+Best PSNR (dB) & $26.10\pm0.02$ & $25.89\pm0.07$ \\
+Best LPIPS & $0.172\pm0.001$ & $0.175\pm0.002$ \\
+No channel $h_0$ acc. & $58.23\pm1.57$ & $\mathbf{83.33\pm0.81}$ \\
+AWGN $+5$ dB $h_0$ acc. & $55.73\pm0.72$ & $\mathbf{82.57\pm0.31}$ \\
+AWGN $+10$ dB $h_0$ acc. & $58.20\pm1.59$ & $\mathbf{83.37\pm0.76}$ \\
+Rayleigh $+5$ dB $h_0$ acc. & $28.67\pm0.65$ & $\mathbf{58.57\pm0.47}$ \\
+Rayleigh $+10$ dB $h_0$ acc. & $48.63\pm1.31$ & $\mathbf{78.80\pm0.72}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{../../rstoken/figs/fig_exp_l0_task_robustness_v3.png}
+\caption{L0 task-path robustness under no-channel, AWGN, and Rayleigh conditions. The plot visualizes the same $h_0$/L0 bag-of-words task-path evidence as Table~\ref{tab:task_seed}; it is used only for $k=1$ task-path claims.}
+\label{fig:l0_task_robustness}
+\end{figure}
+
+\textbf{Result.} RemoteCLIP distillation provides a large and stable L0 task gain. Without a channel, $h_0$/L0 bag-of-words accuracy improves from $58.23\pm1.57\%$ to $83.33\pm0.81\%$, a gain of 25.10 percentage points. Under AWGN $+5$ dB and $+10$ dB, the distilled model reaches $82.57\pm0.31\%$ and $83.37\pm0.76\%$, close to its no-channel performance. Rayleigh fading is more difficult, but the distilled model still outperforms the no-distillation baseline by 29.90 and 30.17 percentage points at $+5$ dB and $+10$ dB, respectively.
+
+We verified from the training configurations that \texttt{rvq\_baseline} and \texttt{rvq\_distill} share init seed 42; the gap is therefore not attributable to weight-init noise.
+
+\textbf{Conclusion.} Table~\ref{tab:task_seed} supports the claim that RemoteCLIP distillation significantly improves the scene-level discriminability of L0 indices, making the $k=1$ low-rate task path more usable. This conclusion concerns L0 task fidelity only; it does not imply that all RVQ layers become semantic, nor does it prove reconstruction quality for $k=2\ldots4$.
+
+\subsection{Where Does L0 Semantics Come From? A Distillation-Placement Counterfactual}
+\textbf{Problem.} The previous subsection shows that the L0 indices of \texttt{rvq\_distill} are scene-discriminative. A natural follow-up question is whether this L0 specialization is genuinely caused by where the RemoteCLIP loss is attached, or whether it would have emerged at the first residual layer regardless. A layered linear probe fit on the main model alone is suggestive but cannot, by itself, separate these two explanations: the probe is fit on cumulative codewords from the same checkpoint that was supervised at L0, so it cannot rule out a circular reading in which L0 simply happens to be probed first. We therefore answer this question with a distillation-placement counterfactual.
+
+\textbf{Setting.} Three matched RVQ tokenizers are trained that differ only in the layer at which the RemoteCLIP alignment loss is applied:
+\begin{itemize}
+    \item \emph{L0 (main).} The published \texttt{rvq\_distill} model, with the RemoteCLIP teacher~\cite{liu2024remoteclip} aligning the L0 straight-through-quantized feature.
+    \item \emph{All layers.} The same alignment loss applied to the RVQ summed representation $\mathbf{z}_q = \sum_{\ell=0}^{3}\mathbf{z}_q^{(\ell)}$.
+    \item \emph{L1.} The alignment loss moved to the L1 straight-through-quantized feature.
+\end{itemize}
+All three checkpoints share seed $=42$, the same RemoteCLIP teacher, the same 50-epoch schedule, the same reconstruction and commitment loss weights, and the same encoder/decoder/quantizer architecture in the residual ordering of~\cite{lee2022residual}. Table~\ref{tab:layer_target_cf} reports, for each checkpoint, $h_0$/L0 bag-of-words accuracy across five channel conditions, $k{=}4$ PSNR and reconstructed-image classification accuracy across the same five conditions, and the four cumulative L0$\to$L0+L1+L2+L3 linear probes. The probe rows are kept as one of four metric families and are evaluated jointly on all three counterfactual checkpoints; together with the placement intervention they avoid the circular reading of a single-checkpoint probe.
+
+\begin{table*}[!t]
+\centering
+\caption{Distillation-placement counterfactual. Three matched RVQ tokenizers that differ only in where the RemoteCLIP alignment loss is applied: at L0 (the main \texttt{rvq\_distill}), at the full RVQ representation $\mathbf{z}_q$ (``all layers''), or at L1 alone. Same seed $=42$, same teacher, same 50-epoch schedule, same loss weights; $n{=}1000$ AID test images per channel condition. Probe rows are linear classifiers fit on cumulative quantized features.}
+\label{tab:layer_target_cf}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Setting & L0 only (main) & All layers & L1 only \\
+\midrule
+\multicolumn{4}{@{}l}{\emph{$h_0$ accuracy ($k{=}1$, \%)}} \\
+no-channel         & 82.6 & 81.2 & 34.2 \\
+AWGN $+5$~dB       & 82.1 & 79.8 & 32.1 \\
+AWGN $+10$~dB      & 82.6 & 81.2 & 34.2 \\
+Rayleigh $+5$~dB   & 58.6 & 49.3 & 10.4 \\
+Rayleigh $+10$~dB  & 77.7 & 74.2 & 24.0 \\
+\midrule
+\multicolumn{4}{@{}l}{\emph{$k{=}4$ PSNR (dB)}} \\
+no-channel         & 25.92 & 25.64 & 22.32 \\
+AWGN $+5$~dB       & 23.94 & 23.67 & 14.36 \\
+AWGN $+10$~dB      & 25.92 & 25.64 & 22.29 \\
+Rayleigh $+5$~dB   & 16.93 & 16.57 & 12.45 \\
+Rayleigh $+10$~dB  & 20.63 & 20.28 & 13.08 \\
+\midrule
+\multicolumn{4}{@{}l}{\emph{$k{=}4$ recon-cls accuracy (\%)}} \\
+no-channel         & 86.9 & 86.1 & 35.3 \\
+AWGN $+5$~dB       & 84.6 & 83.1 & 3.7  \\
+AWGN $+10$~dB      & 86.9 & 86.1 & 35.2 \\
+Rayleigh $+5$~dB   & 22.6 & 19.2 & 2.8  \\
+Rayleigh $+10$~dB  & 66.8 & 62.8 & 3.0  \\
+\midrule
+\multicolumn{4}{@{}l}{\emph{Layered linear probe on cumulative codewords (\%)}} \\
+L0                 & 86.0 & 86.2 & 30.5 \\
+L0+L1              & 87.8 & 87.0 & 33.7 \\
+L0+L1+L2           & 87.9 & 88.3 & 35.8 \\
+L0+L1+L2+L3        & 87.9 & 88.3 & 36.5 \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\textbf{Result.} The L1-only counterfactual collapses across all four metric families. The L0 layered probe drops from $86.0\%$ to $30.5\%$ ($-55.5$~pp), $h_0$ accuracy at no-channel drops from $82.6\%$ to $34.2\%$ ($-48.4$~pp), and clean $k{=}4$ PSNR drops from $25.92$~dB to $22.32$~dB ($-3.60$~dB); under AWGN $+5$~dB the $k{=}4$ PSNR loss reaches $-9.58$~dB and $k{=}4$ recon-cls accuracy is $3.7\%$, near chance. Critically, the L1 probe does not rise to compensate: every cumulative probe stays in the 30--37\% band, so the missing semantics are not relocated to L1, the entire RVQ training fails to converge well. The all-layer counterfactual is consistently weaker than the L0-only main model but is not catastrophic. Its $h_0$ deficit ranges from $-1.4$~pp at the no-channel and AWGN $+10$~dB conditions to $-9.3$~pp at Rayleigh $+5$~dB; clean $k{=}4$ PSNR falls only $-0.28$~dB and $k{=}4$ recon-cls only $-0.8$~pp. The layered probe under all-layer distillation is essentially flat ($\pm0.4$~pp relative to the main model), so spreading the alignment loss dilutes L0's semantic concentration modestly without compensating elsewhere.
+
+\textbf{Conclusion.} L0-only distillation is a measured optimum and a causal consequence of where the distillation loss is attached, not an architectural property of the first residual layer: spreading the alignment loss across all layers produces a modest, partial dilution, while moving it to L1 is catastrophic and degrades every metric family at once. A single seed $=42$ is used for all three checkpoints, but the observed deltas dwarf the three-seed standard deviations measured in our main reconstruction results (PSNR std $\approx 0.08$~dB $\ll 0.28$~dB; $h_0$ std $\approx 0.8$~pp $\ll 9.3$~pp), so initialization noise cannot explain the gap. The layered probe is kept as one of four metric families rather than as the sole evidence for layer specialization, and the broader claim that L1--L3 are better interpreted as residual-detail layers for the reconstruction path is supported jointly by the placement intervention and by the probe.
+
+\subsection{How Do Additional RVQ Layers Affect Reconstruction?}
+\textbf{Problem.} Showing that L0 carries task semantics does not mean that L0 alone is sufficient for image reconstruction. This experiment asks whether transmitting additional RVQ layers improves image quality and reconstructed-image classification accuracy on the reconstruction path.
+
+\textbf{Setting.} Table~\ref{tab:recon_path} reports reconstruction-path results for the RemoteCLIP-distilled tokenizer, evaluated under three independent training seeds (s41/s42/s43); we report mean $\pm$ std across the three seeds. The $h_0$/L0 metric is not used in this subsection. Claims about $k=2\ldots4$ are supported only by PSNR, LPIPS, and clean AID ResNet34 reconstructed-image classifier accuracy. Each cell aggregates $1{,}000$ AID test images per condition, and channel noise is held identical across seeds (the per-cell variation reflects only the three RVQ-distill model seeds). The full $k=1\ldots4$ sweep is reported for all five channel configurations.
+
+\begin{table*}[!t]
+\centering
+\caption{Reconstruction path for the RemoteCLIP-distilled tokenizer, reported as mean $\pm$ std over three independent training seeds (s41/s42/s43). The $h_0$/L0 metric is not used here; $k=2\ldots4$ claims are supported by reconstructed-image metrics.}
+\label{tab:recon_path}
+\begin{tabular}{@{}llrrrrr@{}}
+\toprule
+Channel & SNR & $k$ & Bits/image & PSNR (dB) & LPIPS $\downarrow$ & Recon. cls. acc. (\%) \\
+\midrule
+None & -- & 1 & 2{,}560 & $22.98\pm0.09$ & $0.284\pm0.002$ & $71.4\pm1.3$ \\
+None & -- & 2 & 5{,}120 & $24.76\pm0.04$ & $0.205\pm0.001$ & $84.6\pm0.2$ \\
+None & -- & 3 & 7{,}680 & $25.55\pm0.06$ & $0.183\pm0.002$ & $86.6\pm0.3$ \\
+None & -- & 4 & 10{,}240 & $25.92\pm0.08$ & $0.175\pm0.002$ & $86.8\pm0.4$ \\
+\midrule
+AWGN & $+5$ dB & 1 & 2{,}560 & $21.99\pm0.07$ & $0.313\pm0.002$ & $68.5\pm1.4$ \\
+AWGN & $+5$ dB & 2 & 5{,}120 & $23.24\pm0.02$ & $0.245\pm0.001$ & $80.6\pm0.5$ \\
+AWGN & $+5$ dB & 3 & 7{,}680 & $23.72\pm0.04$ & $0.225\pm0.002$ & $83.2\pm0.9$ \\
+AWGN & $+5$ dB & 4 & 10{,}240 & $23.94\pm0.09$ & $0.217\pm0.002$ & $84.4\pm0.9$ \\
+\midrule
+AWGN & $+10$ dB & 1 & 2{,}560 & $22.98\pm0.09$ & $0.284\pm0.002$ & $71.4\pm1.3$ \\
+AWGN & $+10$ dB & 2 & 5{,}120 & $24.76\pm0.04$ & $0.205\pm0.001$ & $84.6\pm0.2$ \\
+AWGN & $+10$ dB & 3 & 7{,}680 & $25.55\pm0.06$ & $0.183\pm0.001$ & $86.6\pm0.4$ \\
+AWGN & $+10$ dB & 4 & 10{,}240 & $25.92\pm0.08$ & $0.175\pm0.002$ & $86.8\pm0.4$ \\
+\midrule
+Rayleigh & $+5$ dB & 1 & 2{,}560 & $16.95\pm0.05$ & $0.481\pm0.002$ & $22.0\pm1.5$ \\
+Rayleigh & $+5$ dB & 2 & 5{,}120 & $16.94\pm0.06$ & $0.470\pm0.003$ & $20.5\pm0.4$ \\
+Rayleigh & $+5$ dB & 3 & 7{,}680 & $16.90\pm0.05$ & $0.470\pm0.003$ & $19.7\pm1.3$ \\
+Rayleigh & $+5$ dB & 4 & 10{,}240 & $16.90\pm0.07$ & $0.471\pm0.003$ & $19.7\pm2.6$ \\
+\midrule
+Rayleigh & $+10$ dB & 1 & 2{,}560 & $19.87\pm0.07$ & $0.383\pm0.002$ & $55.2\pm1.9$ \\
+Rayleigh & $+10$ dB & 2 & 5{,}120 & $20.33\pm0.07$ & $0.342\pm0.003$ & $63.4\pm1.3$ \\
+Rayleigh & $+10$ dB & 3 & 7{,}680 & $20.50\pm0.04$ & $0.330\pm0.003$ & $65.1\pm0.7$ \\
+Rayleigh & $+10$ dB & 4 & 10{,}240 & $20.55\pm0.07$ & $0.326\pm0.003$ & $67.7\pm1.1$ \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{../../rstoken/figs/fig_exp_progressive_reconstruction_v3.png}
+\caption{Progressive reconstruction as additional RVQ layers are transmitted. The figure corresponds to the reconstruction-path metrics in Table~\ref{tab:recon_path}; it does not use $h_0$/L0 bag-of-words task metrics.}
+\label{fig:progressive_reconstruction}
+\end{figure}
+
+\textbf{Result.} Without a channel, increasing $k$ from 1 to 4 improves PSNR from $22.98\pm0.09$~dB at $k=1$ to $25.92\pm0.08$~dB at $k=4$, reduces LPIPS from $0.284\pm0.002$ to $0.175\pm0.002$, and raises reconstructed-image classifier accuracy from $71.4\pm1.3$\% to $86.8\pm0.4$\%. The $k=1\to4$ PSNR gap of $2.94$~dB far exceeds the per-cell std of $0.04$--$0.09$~dB, so progressive reconstruction is statistically robust across seeds. AWGN $+5$ dB shows the same direction: PSNR rises from $21.99\pm0.07$~dB at $k=1$ to $23.94\pm0.09$~dB at $k=4$, and reconstructed-image classifier accuracy increases from $68.5\pm1.4$\% to $84.4\pm0.9$\%. The AWGN $+10$ dB sweep is statistically indistinguishable from the no-channel sweep at every $k$, with cell-wise differences well within one std. Rayleigh $+5$ dB is a more difficult fading stress case: PSNR stays near $16.9$~dB regardless of $k$, and reconstructed-image classifier accuracy collapses to $19.7\pm2.6$\% at $k=4$ in the unprotected reconstruction-path sweep, so additional RVQ layers do not help under deep fading. Rayleigh $+10$ dB partially recovers, with $k=4$ reaching $20.55\pm0.07$~dB PSNR and $67.7\pm1.1$\% reconstructed-image classifier accuracy; the progression with $k$ is preserved but modest.
+
+\textbf{Conclusion.} Table~\ref{tab:recon_path} supports the conclusion that additional RVQ layers progressively improve the reconstruction path in the no-channel and AWGN sweeps, with seed-to-seed variation an order of magnitude smaller than the $k=1\to4$ gap. Under strong Rayleigh fading at $+5$ dB the progression is largely lost and the reconstruction path degrades substantially across all seeds; at $+10$ dB only a modest, partial recovery is preserved. This conclusion is supported only by reconstruction-path metrics and does not rely on $h_0$/L0 bag-of-words accuracy.
+
+\subsection{Strict Same-Transmitted-Bit Codec+LDPC Stress Baseline}
+\textbf{Problem.} Showing that RS-Token indices can be wrapped in a rate-1/2 LDPC code and decoded under noisy channels supports only a compatibility claim. A sharper question is whether a conventional codec+LDPC pipeline catches up with RS-Token once both pipelines are constrained to transmit the same number of channel bits. This subsection answers that question with a strict same-transmitted-bit stress comparison: RS-Token, JPEG2000 and WebP each transmit identical numbers of channel bits through the same LDPC protection, and decode failure together with reconstruction quality are reported at the receiver.
+
+\textbf{Setting.} Three transmitted-bit budgets are evaluated: total bits $\in \{5{,}120,\ 10{,}240,\ 20{,}480\}$. Every method is protected by the same rate-1/2 systematic sparse LDPC code, decoded with min-sum belief propagation; this LDPC realisation is a custom sparse code in this repository, not 5G NR LDPC. Because the coding rate is $1/2$, the source-bit budget is half of the transmitted-bit budget. RS-Token uses $k=1,2,4$ RVQ layers so that the source-bit count matches $2{,}560$, $5{,}120$ and $10{,}240$ bits/image, respectively. JPEG2000 and WebP encode each image to the same matching source-bit budget and then receive the same rate-1/2 LDPC protection as RS-Token. Each cell is averaged over five channel seeds. AWGN and Rayleigh fading channels at SNR $=+10$~dB are reported in Table~\ref{tab:codec_ldpc_strict}; the full $+5$/$+10$~dB sweep is reported in the LDPC appendix.
+
+\begin{table*}[!t]
+\centering
+\caption{Strict same-transmitted-bit codec+LDPC stress baseline at SNR $=+10$~dB. RS-Token, JPEG2000 and WebP are each encoded to a matched source-bit budget so that, after rate-1/2 LDPC protection, the total transmitted-bit budget is identical across the three methods. Source bits (mean) is the actual generated source-bit count after encoding; the WebP encoder cannot always reach the lowest budget exactly. Decode failure is the fraction of images whose LDPC plus container decode produced no usable output. Valid PSNR is computed only on successfully decoded images; ``--'' indicates no successful decode and therefore no valid PSNR. Numbers are averaged over five channel seeds. The LDPC code used here is a custom rate-1/2 systematic sparse code with min-sum belief-propagation decoding, not 5G NR LDPC.}
+\label{tab:codec_ldpc_strict}
+\begin{tabular}{@{}llcrrrrr@{}}
+\toprule
+Method & Channel & $k$ & Total bits & Src. bits (mean) & Decode fail.\ (\%) & Recon.\ cls.\ acc.\ (\%) & Valid PSNR (dB) \\
+\midrule
+RS-Token & AWGN     & 1  &  5{,}120 &  2{,}560 &   0.0 & 70.3 & 22.95 \\
+JPEG2000 & AWGN     & -- &  5{,}120 &  2{,}663 &  99.9 &  0.0 & --    \\
+WebP     & AWGN     & -- &  5{,}120 & 14{,}164 &  99.3 &  0.3 & --    \\
+RS-Token & AWGN     & 2  & 10{,}240 &  5{,}120 &   0.0 & 84.3 & 24.77 \\
+JPEG2000 & AWGN     & -- & 10{,}240 &  5{,}192 &  90.2 &  0.7 & --    \\
+WebP     & AWGN     & -- & 10{,}240 & 14{,}301 &  94.7 &  3.2 & --    \\
+RS-Token & AWGN     & 4  & 20{,}480 & 10{,}240 &   0.0 & 86.9 & 25.92 \\
+JPEG2000 & AWGN     & -- & 20{,}480 & 10{,}246 &  62.1 & 14.3 & --    \\
+WebP     & AWGN     & -- & 20{,}480 & 15{,}410 &  79.4 & 13.6 & --    \\
+\midrule
+RS-Token & Rayleigh & 1  &  5{,}120 &  2{,}560 &   0.0 & 69.5 & 22.56 \\
+JPEG2000 & Rayleigh & -- &  5{,}120 &  2{,}663 &  99.9 &  0.0 & --    \\
+WebP     & Rayleigh & -- &  5{,}120 & 14{,}164 & 100.0 &  0.0 & --    \\
+RS-Token & Rayleigh & 2  & 10{,}240 &  5{,}120 &   0.0 & 83.0 & 24.13 \\
+JPEG2000 & Rayleigh & -- & 10{,}240 &  5{,}192 &  92.8 &  0.5 & --    \\
+WebP     & Rayleigh & -- & 10{,}240 & 14{,}301 & 100.0 &  0.0 & --    \\
+RS-Token & Rayleigh & 4  & 20{,}480 & 10{,}240 &   0.0 & 86.3 & 25.08 \\
+JPEG2000 & Rayleigh & -- & 20{,}480 & 10{,}246 &  71.6 &  1.3 & --    \\
+WebP     & Rayleigh & -- & 20{,}480 & 15{,}410 & 100.0 &  0.0 & --    \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\textbf{Result.} Table~\ref{tab:codec_ldpc_strict} shows that under matched transmitted bits, the RS-Token decode-fail rate is uniformly $0.0\%$ across all three budgets and both reported channels. The codec+LDPC baselines, in contrast, fail on a large fraction of images even at the largest budget. Under AWGN $+10$~dB at total bits $=20{,}480$, JPEG2000+LDPC fails on $62.1\%$ of images and WebP+LDPC fails on $79.4\%$; for the smaller AWGN $+10$~dB budgets, JPEG2000+LDPC fails on $90.2$--$99.9\%$ and WebP+LDPC fails on $94.7$--$99.3\%$ of images. The headline range across all AWGN $+10$~dB rows is therefore $62.1$--$99.9\%$ for JPEG2000+LDPC and $79.4$--$99.3\%$ for WebP+LDPC. Under Rayleigh $+10$~dB at total bits $=20{,}480$, RS-Token retains a $0.0\%$ decode-fail rate while JPEG2000+LDPC fails on $71.6\%$ of images and WebP+LDPC fails on $100.0\%$. Reconstructed-image classifier accuracy reaches $86.9\%$ for RS-Token at $k=4$ under AWGN $+10$~dB and $86.3\%$ at $k=4$ under Rayleigh $+10$~dB; the codec+LDPC baselines remain at $0.0$--$14.3\%$ across all conditions because failed decodes count as classification errors. The reduction in decode failure observed for JPEG2000+LDPC at the largest AWGN $+10$~dB budget is a modest, partial improvement, not a closing of the gap.
+
+\textbf{Conclusion.} RS-Token discrete-token transmission and a conventional codec+LDPC pipeline are not equivalent under matched transmitted bits. The codec+LDPC pipeline retains a structural fragility because compressed-bitstream decoders fail on residual bit errors that a rate-1/2 LDPC code cannot fully correct, while RS-Token indices remain dictionary-resolvable per token: a residual bit error within an index only perturbs that token's codebook lookup rather than corrupting a globally entropy-coded container. The qualitative gap is preserved across both channels and all three transmitted-bit budgets in Table~\ref{tab:codec_ldpc_strict}, and Rayleigh $+10$~dB at the largest budget summarises it sharply: RS-Token $0.0\%$ decode failure, JPEG2000+LDPC $71.6\%$, WebP+LDPC $100.0\%$. The LDPC code used here is again a custom rate-1/2 systematic sparse code with min-sum belief propagation, not 5G NR LDPC, and the comparison is at fixed transmitted bits rather than under any standard communication protocol.
+
+\subsection{Does the L0 Tokenizer Transfer Zero-Shot to NWPU-RESISC45?}
+\textbf{Problem.} Sections~IV-B--IV-D report task-path accuracy on AID~\cite{xia2017aid} only. A reasonable concern is whether RemoteCLIP-distilled~\cite{liu2024remoteclip} L0 carries genuine remote-sensing scene semantics, or merely AID-specific features that happen to align with the AID label set. We therefore ask whether the AID-trained tokenizer transfers zero-shot to a different RS scene benchmark.
+
+\textbf{Setting.} The AID-trained tokenizer (encoder, RVQ codebooks, and decoder weights all frozen) is applied directly to NWPU-RESISC45~\cite{cheng2017nwpu}, which contains 45 classes and 31{,}500 images. Only the linear $h_0$ probe is re-fit on NWPU's training split, using the canonical 60/20/20 split. Both \texttt{rvq\_distill} and \texttt{rvq\_baseline} are evaluated under matched conditions, with a single seed (42) and $n=6{,}300$ NWPU test images per condition.
+
+\begin{table}[!t]
+\centering
+\caption{Zero-shot transfer of the AID-trained L0 tokenizer to NWPU-RESISC45. Encoder, RVQ, and decoder weights are frozen; only the linear $h_0$ probe is re-fit on NWPU. Single seed, $n=6{,}300$ test images per condition.}
+\label{tab:nwpu_zeroshot}
+\begin{tabular}{@{}llrrr@{}}
+\toprule
+Channel & SNR & \texttt{rvq\_distill} & \texttt{rvq\_baseline} & Gap \\
+        &     & $h_0$ acc. (\%)        & $h_0$ acc. (\%)         & (pp)  \\
+\midrule
+None     & --        & 64.4 & 43.5 & 20.9 \\
+AWGN     & $+5$ dB   & 61.4 & 41.9 & 19.5 \\
+AWGN     & $+10$ dB  & 64.4 & 43.5 & 20.9 \\
+Rayleigh & $+5$ dB   & 29.7 & 16.5 & 13.2 \\
+Rayleigh & $+10$ dB  & 53.3 & 33.6 & 19.7 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Result.} Table~\ref{tab:nwpu_zeroshot} reports the zero-shot transfer numbers. On the clean channel, \texttt{rvq\_distill} reaches 64.4\% while \texttt{rvq\_baseline} reaches 43.5\%, a gap of 20.9~pp. AWGN $+10$ dB preserves the same gap of 20.9~pp. Under Rayleigh fading the gaps narrow but remain substantial: 19.7~pp at $+10$ dB (53.3\% vs. 33.6\%) and 13.2~pp at $+5$ dB (29.7\% vs. 16.5\%). On AID, the clean-channel distillation gap is 25.1~pp (Table~\ref{tab:task_seed}); on NWPU it shrinks 4.2~pp to 20.9~pp despite the harder 45-class task and shifted class distribution. Absolute $h_0$ accuracy drops because NWPU has 45 classes (chance 2.2\%) versus AID's 30 classes (chance 3.3\%).
+
+\textbf{Conclusion.} We characterize this transfer as partial: absolute $h_0$ accuracy drops on the harder 45-way benchmark, but the distillation contribution is preserved (the gap shrinks only 4.2~pp despite cross-dataset shift). Rayleigh $+5$ dB exhibits the smallest gap (13.2~pp), suggesting that strong fading combined with dataset shift is the hardest combination for the distilled L0 representation. The result is consistent with a modest claim that RemoteCLIP-distilled L0 encodes RS-domain scene semantics rather than AID-specific features.
+
+\subsection{How Do Unprotected Conventional Bitstreams Fail over BPSK Channels?}
+\textbf{Problem.} The main internal comparison for RS-Token is \texttt{rvq\_baseline}, because it shares the same RVQ-index framework and directly tests the effect of RemoteCLIP distillation. WebP and JPEG2000 are external conventional compression baselines. They are not architectural ablations and should not be treated as a perfectly fair semantic-tokenizer comparison. We therefore ask a narrower question: how do conventional compressed files fail when their bitstreams are sent unprotected over BPSK noisy channels?
+
+\textbf{Setting.} WebP and JPEG2000 are encoded at target bit budgets of 2{,}560, 5{,}120, and 10{,}240 bits/image, aligned with RS-Token $k=1$, $k=2$, and $k=4$. The conventional-compression experiment has no target-bits setting at 7{,}680 bits/image and therefore does not cover the RS-Token $k=3$ operating point. The compressed bitstreams are sent directly over BPSK channels without LDPC or any other error-correcting code. Actual bits denote the mean generated file size. Decode failure is the fraction of images that cannot be decoded by the receiver. All-image classifier accuracy counts failed decodes as classification errors, while valid PSNR is computed only on successfully decoded images.
+
+\begin{table*}[!t]
+\centering
+\caption{External conventional-compression stress test. These are unprotected WebP/JPEG2000 compressed bitstreams over BPSK channels; they are not LDPC-protected. Target bits align with RS-Token $k=1,2,4$ only.}
+\label{tab:classic_unprotected}
+\begin{tabular}{@{}llrrrrr@{}}
+\toprule
+Method & Channel/SNR & Target bits & Actual bits (mean) & Decode failure & All-image cls. acc. (\%) & Valid PSNR (dB) \\
+\midrule
+WebP & None & 2{,}560 & 14{,}164 & 0.000 & 61.8 & 26.56 \\
+WebP & AWGN $+10$ dB & 2{,}560 & 14{,}164 & 0.039 & 58.8 & 26.51 \\
+WebP & Rayleigh $+10$ dB & 2{,}560 & 14{,}164 & 0.999 & 0.0 & 10.52 \\
+WebP & None & 5{,}120 & 14{,}301 & 0.000 & 62.6 & 26.65 \\
+WebP & AWGN $+10$ dB & 5{,}120 & 14{,}301 & 0.045 & 59.9 & 26.63 \\
+WebP & Rayleigh $+10$ dB & 5{,}120 & 14{,}301 & 1.000 & 0.0 & -- \\
+WebP & None & 10{,}240 & 15{,}410 & 0.000 & 67.5 & 27.04 \\
+WebP & AWGN $+10$ dB & 10{,}240 & 15{,}410 & 0.041 & 64.5 & 26.97 \\
+WebP & Rayleigh $+10$ dB & 10{,}240 & 15{,}410 & 1.000 & 0.0 & -- \\
+\midrule
+JPEG2000 & None & 2{,}560 & 2{,}663 & 0.000 & 6.5 & 20.19 \\
+JPEG2000 & AWGN $+10$ dB & 2{,}560 & 2{,}663 & 0.003 & 6.6 & 20.11 \\
+JPEG2000 & Rayleigh $+10$ dB & 2{,}560 & 2{,}663 & 1.000 & 0.0 & -- \\
+JPEG2000 & None & 5{,}120 & 5{,}192 & 0.000 & 11.0 & 22.35 \\
+JPEG2000 & AWGN $+10$ dB & 5{,}120 & 5{,}192 & 0.001 & 10.9 & 22.27 \\
+JPEG2000 & Rayleigh $+10$ dB & 5{,}120 & 5{,}192 & 1.000 & 0.0 & -- \\
+JPEG2000 & None & 10{,}240 & 10{,}246 & 0.000 & 39.6 & 23.97 \\
+JPEG2000 & AWGN $+10$ dB & 10{,}240 & 10{,}246 & 0.004 & 38.9 & 23.90 \\
+JPEG2000 & Rayleigh $+10$ dB & 10{,}240 & 10{,}246 & 1.000 & 0.0 & -- \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\textbf{Result.} Conventional compressed bitstreams are useful clean-reference baselines, but unprotected bitstreams show clear file-level fragility under noisy channels. WebP has higher clean reconstructed-image classifier accuracy, but its actual bit counts are far above the requested target bits in this implementation, so it is not a strict rate-matched comparator. Under Rayleigh $+10$ dB, WebP decoding fails for essentially all images. JPEG2000 more closely matches the requested target bits, but its clean classifier accuracy is low at small bit budgets and it also suffers many decode failures under AWGN $+10$ dB and Rayleigh $+10$ dB.
+
+\textbf{Conclusion.} This section supports only a limited conclusion: unprotected conventional compressed bitstreams are prone to file-level failure over BPSK noisy channels, whereas RS-Token indices are easier to separate into task and reconstruction representations that can be used layer by layer. This experiment is not a complete comparison against an engineered ``codec + strong channel code + retransmission'' system, and it does not replace \texttt{rvq\_baseline} as the core baseline for testing the contribution of RemoteCLIP distillation.
+
+\section{Discussion}
+The experiments support the following conclusions, each tied to a distinct metric family. First, the semantic-layer conclusion is a task-path conclusion: across three model seeds, L0 bag-of-words accuracy improves from $58.23\pm1.57\%$ to $83.33\pm0.81\%$. Second, L0-only distillation is established as a measured optimum by the distillation-placement counterfactual: moving the RemoteCLIP signal to L1 collapses both task accuracy and reconstruction, while spreading it across all four RVQ layers uniformly degrades both paths, so the layer specialization (L0 task-biased, L1--L3 residual detail) is a property of where the distillation loss is attached rather than an architectural accident. Third, the progressive-reconstruction conclusion is a reconstruction-path conclusion: across three model seeds, $k{=}4$ no-channel PSNR is $25.92\pm0.08$~dB and reconstructed-image classifier accuracy is $86.8\pm0.4\%$, and in the full no-channel and AWGN $+5$~dB $k=1\ldots4$ sweeps PSNR, LPIPS, and reconstructed-image classifier accuracy generally improve as $k$ increases. The strict same-transmitted-bit codec+LDPC stress baseline gives a stronger statement than a bare compatibility claim: under matched transmitted bits, RS-Token attains a $0.0\%$ decode-failure rate across all conditions while a rate-1/2 LDPC-protected JPEG2000 or WebP pipeline fails on $62$--$100\%$ of images, so the qualitative gap is not closed by adding error correction to a conventional codec. The unprotected WebP/JPEG2000 results support an external stress-test conclusion: unprotected conventional compressed bitstreams can fail to decode over BPSK noisy channels and should not be described as a complete codec-plus-channel-code comparison.
+
+RemoteCLIP~\cite{liu2024remoteclip} helps the first layer because it provides a domain-specific semantic geometry for remote-sensing images. Distilling this geometry into L0 makes the first codebook layer more discriminative for aerial scene categories than a reconstruction-only RVQ layer~\cite{lee2022residual}. This is consistent with the broader idea of distilling foundation-model visual features into a VQ tokenizer for stronger semantics~\cite{beitv2}. This does not mean that all layers become semantic, nor that L0 alone is sufficient for high-fidelity reconstruction. A more precise interpretation is layer specialization: L0 is biased toward task semantics, while L1--L3 improve pixel and perceptual detail.
+
+A teacher ablation comparing RemoteCLIP against an OpenAI CLIP baseline (matched architecture and seed) finds a modest 1.4--6.0~pp $h_0$ advantage for RemoteCLIP that grows under fading; reconstruction metrics (PSNR, recon-cls at $k{=}4$) are essentially identical, within 0.1~dB and 0.3~pp (Table~\ref{tab:teacher_ablation}). The contribution should therefore not be claimed as RemoteCLIP exclusivity: vision-language distillation is the load-bearing mechanism, and RemoteCLIP provides a domain-specific teacher whose advantage manifests primarily under fading channels. This is consistent with related observations on using foundation-model embeddings directly in semantic communication~\cite{semclip}, where the marginal benefit of a teacher depends on domain shift.
+
+\begin{table}[!t]
+\centering
+\caption{Teacher ablation: RemoteCLIP vs.\ OpenAI CLIP, matched architecture and seed. The h0 advantage of RemoteCLIP grows under fading, but $k{=}4$ reconstruction is essentially identical across teachers.}
+\label{tab:teacher_ablation}
+\begin{tabular}{@{}llrrr@{}}
+\toprule
+Channel & SNR & RemoteCLIP & OpenAI CLIP & $\Delta$ \\
+\midrule
+\multicolumn{5}{@{}l}{\emph{$h_0$ accuracy ($k{=}1$, \%)}} \\
+None     & --       & 82.6 & 80.8 & $+1.8$ \\
+AWGN     & $+5$ dB  & 82.5 & 78.8 & $+3.7$ \\
+AWGN     & $+10$ dB & 82.6 & 80.8 & $+1.8$ \\
+Rayleigh & $+5$ dB  & 59.8 & 53.8 & $+6.0$ \\
+Rayleigh & $+10$ dB & 79.2 & 74.4 & $+4.8$ \\
+\midrule
+\multicolumn{5}{@{}l}{\emph{$k{=}4$ no-channel reconstruction}} \\
+PSNR (dB)            & & 25.92 & 26.03 & $-0.11$ \\
+recon-cls (\%)       & & 86.9  & 86.6  & $+0.3$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The distillation-weight sweep in Table~\ref{tab:lambda_sweep} substantiates the trade-off between semantic alignment and fading robustness. As $\lambda$ grows from $0.1$ to $1.0$, no-channel $h_0$ accuracy increases monotonically to $84.5\%$, but Rayleigh $+5$~dB $h_0$ peaks at $\lambda=0.5$ ($59.1\%$) and falls back to $49.8\%$ at $\lambda=1.0$; meanwhile $k{=}4$ no-channel PSNR decreases monotonically from $26.20$~dB to $25.64$~dB. We adopt $\lambda=0.5$ as the operating point that balances these directions, not as a universally optimal value.
+
+\begin{table}[!t]
+\centering
+\caption{Distillation-weight sweep at fixed seed $=42$, identical architecture, and the same 50-epoch training schedule. Larger $\lambda$ improves no-channel and AWGN $h_0$ monotonically, but Rayleigh $h_0$ peaks at $\lambda=0.5$ while $\lambda=1.0$ regresses; reconstruction quality also decreases monotonically with $\lambda$. This is the basis for selecting $\lambda=0.5$ as the main operating point.}
+\label{tab:lambda_sweep}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Condition & $\lambda{=}0.1$ & $\lambda{=}0.5$ (main) & $\lambda{=}1.0$ \\
+\midrule
+No-channel $h_0$ (\%)            & 71.2 & 82.4 & $\mathbf{84.5}$ \\
+AWGN $+10$ dB $h_0$ (\%)         & 71.2 & 82.5 & $\mathbf{84.5}$ \\
+AWGN $+5$ dB $h_0$ (\%)          & 69.2 & 82.3 & $\mathbf{83.3}$ \\
+Rayleigh $+10$ dB $h_0$ (\%)     & 64.3 & $\mathbf{79.0}$ & 77.6 \\
+Rayleigh $+5$ dB $h_0$ (\%)      & 42.1 & $\mathbf{59.1}$ & 49.8 \\
+$k{=}4$ no-channel PSNR (dB)     & $\mathbf{26.20}$ & 25.92 & 25.64 \\
+$k{=}4$ no-channel LPIPS $\downarrow$ & $\mathbf{0.165}$ & 0.176 & 0.185 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Zero-shot tokenizer transfer to NWPU-RESISC45~\cite{cheng2017nwpu} (Section~IV-F) shows that the distillation gain is largely preserved across datasets: the gap shrinks only 4.2~pp, from AID's 25.1~pp to NWPU's 20.9~pp. This supports that L0 carries genuine remote-sensing scene semantics rather than AID-specific features. Absolute $h_0$ accuracy drops on the harder 45-way classification, so the cross-dataset claim is limited to partial transfer with the distillation contribution intact.
+
+From a system perspective, RS-Token is best viewed as an application-layer representation above physical-layer adaptation, not as a replacement for HARQ, adaptive modulation and coding, or LDPC~\cite{proakis}; nor is it a direct substitute for end-to-end JSCC over continuous channels~\cite{deepjscc}, but rather a discrete-channel-friendly path that aligns with multilevel codebook plus digital semantic communication~\cite{moc-rvq}. When the link is poor or the receiver only needs an alert, the system can transmit L0 and use the task path. When the link improves or human inspection is required, it can request L1--L3 to improve reconstruction. The LDPC experiment shows that the index representation can be protected by an error-correcting code, but jointly optimizing layer selection, retransmission, modulation, and channel coding remains future work.
+
+The deployed encoder--decoder has 10.87~M parameters and 38.31~GFLOPs per $256\times256$ image. As a development reference, single-image inference latency is 8.59~ms on a laptop-class GPU (fp32) and 66.70~ms on a single CPU thread; latency on actual UAV-edge platforms is left as future work. The RemoteCLIP teacher ($\sim$150~M parameters) is used only during training and is not deployed. The receiver-side codebook adds approximately 8~MB of fp32 storage. The parameter count and computational cost are within the envelope of typical embedded SoCs, making the model a plausible candidate for UAV/edge deployment.
+
+Several limitations remain. The experiments use AID scene classification rather than object detection or semantic segmentation, so the current task-path evidence is strongest for image-level land-cover semantics. Reconstruction-path sweeps are reported across three model seeds, while the distillation-placement, teacher, and cross-dataset ablations use a single training seed (42). The effect sizes observed in those ablations exceed the per-seed standard deviations measured in the main reconstruction experiment by one to two orders of magnitude (e.g., the placement counterfactual changes $h_0$ by $48.4$~pp against a three-seed std of only $0.8$~pp, and $k{=}4$ PSNR by $3.60$~dB against a std of only $0.08$~dB), so initialization noise cannot account for the gaps; multi-seed replication is nonetheless left as future work. We do not provide a strict rate-matched comparison against a complete conventional codec-plus-channel-code system. The LDPC experiment uses a custom sparse LDPC code with min-sum decoding and should not be presented as a 5G NR LDPC comparison.
+
+\section{Conclusion}
+This paper presented RS-Token, a hierarchical RVQ tokenizer for remote-sensing communication. By distilling RemoteCLIP into the first quantization layer, RS-Token makes L0 more task-discriminative, while later layers progressively refine reconstruction. The evaluation separates L0 task-path evidence from multi-layer reconstruction-path evidence and uses plain RVQ index transmission as the internal baseline for testing the contribution of distillation. Unprotected WebP/JPEG2000 and custom rate-1/2 systematic sparse LDPC experiments clarify the external stress-test and channel-coding compatibility boundaries. Overall, the results support a conservative but useful claim: RemoteCLIP-guided layer specialization can provide low-rate task fidelity and progressive reconstruction for channel-robust remote-sensing image communication.
+\bibliographystyle{IEEEtran}
+\bibliography{rs_token_v05}
+
+\end{document}
+
+
+
+
+
+
+
+

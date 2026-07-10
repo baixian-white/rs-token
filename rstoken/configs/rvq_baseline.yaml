@@ -1,0 +1,58 @@
+# Stage 2 ResidualVQ baseline (无蒸馏, 4 层残差量化)
+# 目标:
+#   - val PSNR ≥ Stage 1 (23.80) + 1 dB ≈ 24.8 dB (RVQ 多层应能补回高频)
+#   - 每层 cb_use_global ≥ 50% (各层都活, 没有"前两层吃掉所有"现象)
+#   - quantize_dropout 让模型适应「只传前 k 层」的推理模式
+# 架构:
+#   - encoder/decoder 与 Stage 1 完全相同 (10.87M 参数那套)
+#   - 量化器: VectorQuantize -> ResidualVQ(num_quantizers=4, codebook_size=1024)
+# 与 Stage 1 的差异: 仅 model.quantizer + run_name + ckpt/log 路径
+
+run_name: rvq_baseline_v1
+seed: 42
+
+data:
+  splits_dir: H:/H-CODE/遥感+通信/rstoken/data/AID_splits
+  image_size: 256
+  batch_size: 16
+  num_workers: 4
+  pin_memory: true
+
+model:
+  in_channels: 3
+  base_channels: 64
+  channel_multipliers: [1, 2, 4, 4]
+  num_res_blocks: 1
+  latent_dim: 256
+  codebook_size: 1024
+  commitment_weight: 0.25
+  quantizer: rvq                           # ← Stage 2 关键
+  rvq_num_quantizers: 4                    # 4 层残差: 第1层语义(留给 Stage 3 蒸馏), 后3层细节
+
+optim:
+  lr: 1.0e-4
+  weight_decay: 0.0
+  betas: [0.9, 0.95]
+  warmup_steps: 500
+  total_epochs: 50
+  grad_clip: 1.0
+
+loss:
+  l1_weight: 1.0
+  lpips_weight: 0.1
+  vq_weight: 1.0                           # 此处 vq_loss 是 4 层 commitment 之和
+  lpips_net: alex
+
+logging:
+  log_every: 50
+  val_every_epoch: 1
+  save_every_epoch: 5
+  num_vis_samples: 8
+  use_wandb: false
+  wandb_project: rstoken
+  ckpt_dir: H:/H-CODE/遥感+通信/rstoken/checkpoints/rvq_baseline
+  log_dir:  H:/H-CODE/遥感+通信/rstoken/logs/rvq_baseline
+
+device: cuda
+amp: true
+amp_dtype: bf16

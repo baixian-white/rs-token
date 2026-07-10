@@ -1,0 +1,6 @@
+[submodule "papers/MOC-RVQ/code"]
+	path = papers/MOC-RVQ/code
+	url = https://github.com/Albert2X/moc_rvq.git
+[submodule "papers/RemoteCLIP/code"]
+	path = papers/RemoteCLIP/code
+	url = https://github.com/ChenDelong1999/RemoteCLIP.git

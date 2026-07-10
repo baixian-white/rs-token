@@ -1,0 +1,13 @@
+# E30 — NWPU-RESISC45 zero-shot tokenizer transfer eval config.
+#
+# Used as `--data_yaml` override to scripts/09_eval_rvqs_recon_task_split.py.
+# Encoder/quantizer/decoder weights are not retrained; only the data source
+# is swapped from AID to NWPU-RESISC45. The h0/L0_bow probe is re-fit on the
+# NWPU train split, so the 45-class label space is auto-detected.
+
+data:
+  splits_dir: H:/H-CODE/遥感+通信/rstoken/data/NWPU_splits
+  image_size: 256
+  batch_size: 64
+  num_workers: 4
+  pin_memory: true

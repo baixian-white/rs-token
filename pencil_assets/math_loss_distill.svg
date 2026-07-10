@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="248" height="54" viewBox="0 0 248 54">
+  <rect width="248" height="54" fill="none"/>
+  <text x="124" y="32" text-anchor="middle" fill="#111111"
+        font-family="Cambria Math, Times New Roman, serif" font-size="20">
+    <tspan>&#x2112;</tspan><tspan baseline-shift="sub" font-size="13" font-style="italic">distill</tspan>
+    <tspan> = 1 &#x2212; cos(</tspan><tspan font-style="italic">s</tspan><tspan>,</tspan><tspan font-style="italic">t</tspan><tspan>)</tspan>
+  </text>
+</svg>

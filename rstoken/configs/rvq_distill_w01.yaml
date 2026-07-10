@@ -1,0 +1,57 @@
+# C1 消融: distill_weight = 0.1 (轻蒸馏)
+# 与 rvq_distill.yaml 仅差 distill_weight + run_name + 输出目录
+
+run_name: rvq_distill_w01
+seed: 42
+
+data:
+  splits_dir: H:/H-CODE/遥感+通信/rstoken/data/AID_splits
+  image_size: 256
+  batch_size: 16
+  num_workers: 4
+  pin_memory: true
+
+model:
+  in_channels: 3
+  base_channels: 64
+  channel_multipliers: [1, 2, 4, 4]
+  num_res_blocks: 1
+  latent_dim: 256
+  codebook_size: 1024
+  commitment_weight: 0.25
+  quantizer: rvq
+  rvq_num_quantizers: 4
+
+distill:
+  teacher_ckpt: H:/H-CODE/遥感+通信/rstoken/checkpoints/remoteclip/RemoteCLIP-ViT-B-32.pt
+  teacher_name: ViT-B-32
+  head_hidden: 512
+
+optim:
+  lr: 1.0e-4
+  weight_decay: 0.0
+  betas: [0.9, 0.95]
+  warmup_steps: 500
+  total_epochs: 50
+  grad_clip: 1.0
+
+loss:
+  l1_weight: 1.0
+  lpips_weight: 0.1
+  vq_weight: 1.0
+  distill_weight: 0.1                      # ← 主推 0.5 的 1/5
+  lpips_net: alex
+
+logging:
+  log_every: 50
+  val_every_epoch: 1
+  save_every_epoch: 5
+  num_vis_samples: 8
+  use_wandb: false
+  wandb_project: rstoken
+  ckpt_dir: H:/H-CODE/遥感+通信/rstoken/checkpoints/rvq_distill_w01
+  log_dir:  H:/H-CODE/遥感+通信/rstoken/logs/rvq_distill_w01
+
+device: cuda
+amp: true
+amp_dtype: bf16

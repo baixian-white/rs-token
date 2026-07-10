@@ -1,0 +1,17 @@
+rstoken/data/
+rstoken/checkpoints/
+rstoken/logs/
+rstoken/figs/
+*.pyc
+__pycache__/
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
+.vscode/
+tmp/
+
+# LaTeX build artifacts
+*.aux
+*.blg
+*.log
+*.out
+*.synctex.gz

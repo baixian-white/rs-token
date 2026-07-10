@@ -1,0 +1,654 @@
+%% RS-Token v0.6 English manuscript
+%% Compile: pdflatex rs_token_v06; bibtex rs_token_v06; pdflatex rs_token_v06; pdflatex rs_token_v06
+
+\documentclass[letterpaper,journal]{IEEEtran}
+
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{cite}
+\usepackage{url}
+\usepackage{xspace}
+\usepackage{placeins}
+\usepackage[hidelinks]{hyperref}
+
+\newcommand{\pp}{~pp\xspace}
+\newcommand{\snr}{\mathrm{SNR}}
+\newcommand{\hzero}{h_0}
+\hyphenation{op-tical net-works semi-conduc-tor}
+
+\begin{document}
+
+\title{RS-Token: Hierarchical RemoteCLIP-Distilled Tokens for Channel-Robust Remote-Sensing Communication}
+
+\author{Baohui~Zhang and Jianwei~Tai%
+\thanks{Baohui Zhang and Jianwei Tai are with the School of Internet, Anhui University, Hefei 230601, China (e-mail: y125211005@ahu.edu.cn; taijianwei@ahu.edu.cn). Jianwei Tai is the corresponding author.}}
+
+\markboth{IEEE Geoscience and Remote Sensing Letters}%
+{Zhang and Tai: RS-Token for Channel-Robust Remote-Sensing Communication}
+
+\maketitle
+
+\begin{abstract}
+Remote-sensing links often serve hierarchical downstream demands: a low-rate scene decision may be sufficient under poor connectivity, whereas additional bits are needed for visual inspection and image reconstruction. RS-Token maps this hierarchy to residual vector quantization (RVQ). A RemoteCLIP teacher supervises only the first RVQ layer (L0), while subsequent layers encode reconstruction residuals; transmitting the first $k$ layers therefore provides multiple operating points within one model. On AID, RemoteCLIP distillation raises the no-channel L0 bag-of-words classification accuracy from $58.23\pm1.57\%$ to $83.33\pm0.81\%$ across three training seeds, a gain of 25.10 percentage points. The distilled model retains $82.57\pm0.31\%$ at $+5$~dB AWGN. With all four layers, it reaches $25.92\pm0.08$~dB PSNR and $86.8\pm0.4\%$ reconstructed-image classification accuracy without a channel. Comparisons with ADJSCC reveal a task-fidelity--PSNR trade-off: RS-Token favors task preservation under no-channel and AWGN conditions, whereas the continuous representation is substantially stronger under severe Rayleigh fading. Cross-dataset, distillation-position, encoder, depth, teacher, and loss-weight studies delimit the conditions under which the proposed layer specialization is effective.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Semantic communication, remote sensing, residual vector quantization, RemoteCLIP, task-oriented communication, discrete representation.
+\end{IEEEkeywords}
+
+\section{Introduction}
+\label{sec:introduction}
+
+\IEEEPARstart{R}{emote-sensing} imagery is increasingly transmitted for unmanned-aerial-vehicle inspection, emergency screening, and edge intelligence~\cite{gao2022task}. The communication link may vary because of distance, blockage, and multipath fading, while the information requested by the receiver is itself hierarchical. An automatic alert may need only scene identity, human review requires an interpretable image, and archival analysis may require higher-fidelity reconstruction.
+
+Existing transmission paradigms do not fully expose this hierarchy. Conventional WebP or JPEG2000 bitstreams are mature but can suffer file-level decoding failure when residual bit errors corrupt a global entropy-coded container. Continuous deep joint source-channel coding (deep-JSCC) avoids a brittle file container and provides graceful image degradation~\cite{deepjscc,xu2022adjscc,yang2024swinjscc}, but it does not directly provide a discrete, layer-addressable interface. A reconstruction-trained RVQ offers progressive precision~\cite{lee2022residual,moc-rvq}, yet its first layer is not guaranteed to preserve the remote-sensing semantics needed by a downstream task.
+
+We propose \textbf{RS-Token}, a four-layer RVQ tokenizer in which only L0 is aligned with a frozen RemoteCLIP teacher~\cite{liu2024remoteclip}. Each layer contains a $16\times16$ grid of 1,024-way indices, corresponding to 2,560 bits per image. The transmitter sends a prefix of $k\in\{1,2,3,4\}$ layers. L0 supports a low-rate scene-classification path, while additional layers progressively refine the reconstructed image.
+
+The contributions are threefold. First, a three-seed comparison against an architecture-matched RVQ baseline shows that L0 distillation improves low-rate task fidelity by approximately 25\pp without materially changing reconstruction quality. Distillation-position and paired-initialization controls further show that this gain depends on where the teacher loss is applied. Second, encoder-form, RVQ-depth, teacher, loss-weight, and cross-dataset studies characterize the task--reconstruction trade-off rather than claiming a single universally optimal configuration. Third, comparisons with ADJSCC and with LDPC-protected conventional codecs clarify the scope of the discrete representation: it is favorable for low-rate task preservation under AWGN in the tested setting, but continuous deep-JSCC is markedly more robust under severe Rayleigh fading.
+
+\section{Related Work}
+
+\subsection{Task-Oriented Remote-Sensing Communication}
+DeepJSCC established end-to-end learned image transmission over noisy channels~\cite{deepjscc}; later work introduced SNR-adaptive attention~\cite{xu2022adjscc} and Swin-Transformer backbones~\cite{yang2024swinjscc}. Task-oriented remote-sensing transmission can maintain classification utility at lower rates than reconstruction-centered pipelines~\cite{gao2022task}. Foundation-model priors have also been introduced into zero-shot semantic communication~\cite{semclip}. RS-Token differs by retaining a discrete, hierarchical interface and assigning scene semantics specifically to the first RVQ layer.
+
+\subsection{Discrete Visual Representations and RVQ}
+VQ-VAE introduced learned discrete image representations~\cite{vqvae}, and RVQ extended them by quantizing successive residuals~\cite{lee2022residual}. Multi-stage codebooks are widely used in neural audio codecs such as SoundStream and EnCodec~\cite{soundstream,encodec}; SpeechTokenizer explicitly separates semantic and acoustic information across RVQ layers~\cite{zhang2024speechtokenizer}. Related visual models use discrete tokens for both understanding and generation~\cite{vilau}, while ReVQom applies RVQ to communication-efficient multi-agent perception~\cite{revqom}. MOC-RVQ further combines multilevel codebooks with digital modulation~\cite{moc-rvq}. The present work transfers the layer-specialization principle to remote-sensing imagery and evaluates both task and reconstruction paths under communication channels.
+
+\subsection{Foundation-Model Distillation}
+Semantically structured visual features can supervise compact tokenizers. BEiT~v2 distills foundation-model features into a vector-quantized tokenizer~\cite{beitv2}. RemoteCLIP provides a domain-specific vision-language embedding for remote-sensing images~\cite{liu2024remoteclip}. RS-Token localizes this supervision to L0 instead of constraining the entire latent representation, preserving subsequent RVQ layers for reconstruction detail.
+
+\section{Method}
+\label{sec:method}
+
+\subsection{Problem Formulation}
+Let $x\in\mathbb{R}^{H\times W\times3}$ be an image and $y$ its scene label. The transmitter maps $x$ to hierarchical indices $z_{0:K-1}=\{z_0,\ldots,z_{K-1}\}$ with $K=4$. Every layer has a token grid of $T=16\times16=256$ and a codebook of size $C_\ell=1024$. The payload of a prefix containing $k$ layers is
+\begin{equation}
+B(k)=T k\log_2 C_\ell=2560k,\qquad k\in\{1,2,3,4\}.
+\end{equation}
+Thus $k=1,2,3,4$ correspond to 2,560, 5,120, 7,680, and 10,240 information bits per image. We use $K=4$ as a task--reconstruction--rate compromise; Section~\ref{sec:ablation-depth} evaluates $K\in\{2,3,4,6\}$.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{../../rstoken/figs/fig_method_aech_image2pro.png}
+\caption{RS-Token framework. RemoteCLIP and the distillation head are used only during training. At deployment, the transmitter sends an RVQ prefix; the receiver either constructs an L0 task feature or decodes the received prefix for reconstruction.}
+\label{fig:framework}
+\end{figure}
+
+\subsection{Hierarchical RVQ Encoder--Decoder}
+An encoder $E_\theta$ maps the image to $u=E_\theta(x)\in\mathbb{R}^{T\times D}$. RVQ recursively quantizes the residual:
+\begin{align}
+r^{(0)}&=u,\\
+z_\ell(t)&=\arg\min_{j\in\{0,\ldots,C_\ell-1\}}
+\left\|r^{(\ell)}_t-c_{\ell,j}\right\|_2^2,\\
+q^{(\ell)}_t&=c_{\ell,z_\ell(t)},\qquad
+r^{(\ell+1)}_t=r^{(\ell)}_t-q^{(\ell)}_t.
+\end{align}
+The prefix reconstruction is $q_{0:k-1}=\sum_{\ell=0}^{k-1}q^{(\ell)}$, and the decoder produces $\hat{x}_k=D_\phi(q_{0:k-1})$. The RVQ commitment term is
+\begin{equation}
+\mathcal{L}_{\mathrm{vq}}=\sum_{\ell,t}
+\left\|\operatorname{sg}[r^{(\ell)}_t]-q^{(\ell)}_t\right\|_2^2+
+\beta\left\|r^{(\ell)}_t-\operatorname{sg}[q^{(\ell)}_t]\right\|_2^2.
+\end{equation}
+
+\subsection{RemoteCLIP Distillation on L0}
+The frozen teacher returns a normalized image embedding $f_T(x)\in\mathbb{R}^{512}$. The L0 quantized representation $q_0\in\mathbb{R}^{T\times D}$ is mean-pooled and projected by $g_\psi$ into the teacher space. The distillation loss is
+\begin{equation}
+\mathcal{L}_{\mathrm{distill}}=1-
+\frac{g_\psi(\operatorname{mean}_t q_{0,t})^\top f_T(x)}
+{\|g_\psi(\operatorname{mean}_t q_{0,t})\|_2\|f_T(x)\|_2}.
+\end{equation}
+Only L0 receives this supervision. The full objective is
+\begin{equation}
+\mathcal{L}=\mathcal{L}_{\ell_1}+0.1\mathcal{L}_{\mathrm{LPIPS}}+
+\mathcal{L}_{\mathrm{vq}}+\lambda\mathcal{L}_{\mathrm{distill}},
+\end{equation}
+where LPIPS uses an AlexNet backbone~\cite{zhang2018lpips} and the main model uses $\lambda=0.5$.
+
+\subsection{Channel and Evaluation Paths}
+The binary representation of the first $k$ index layers is BPSK-modulated as $s_i=1-2b_i$. The received symbol is
+\begin{equation}
+y_i=h_i s_i+n_i,\qquad n_i\sim\mathcal{CN}(0,\sigma^2),
+\end{equation}
+where $h_i=1$ for AWGN and $h_i\sim\mathcal{CN}(0,1)$ for Rayleigh fading~\cite{proakis}. We define $\snr=1/\sigma^2$ and assume perfect channel state information for coherent hard decisions.
+
+For the low-rate task path, the receiver forms a normalized L0 index histogram
+\begin{equation}
+h_{0,j}=\frac{1}{T}\sum_{t=1}^{T}\mathbb{1}[\hat z_0^{(t)}=j],
+\qquad j=0,\ldots,1023,
+\end{equation}
+and fits a linear classifier. This metric supports only the $k=1$ scene-level claim. The reconstruction path decodes the received prefix and reports PSNR, LPIPS, and the accuracy of a ResNet34 trained on clean images. Cumulative codeword embeddings are additionally used for layer-wise linear probing, but not as reconstruction metrics.
+
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Experimental Setup}
+
+\subsubsection{Datasets and Preprocessing}
+The main experiments use the 30-class AID aerial-scene dataset~\cite{xia2017aid}. A fixed class-stratified split contains 8,000 training, 1,000 validation, and 1,000 test images. Training uses random resized crops to $256\times256$, while evaluation uses resizing followed by a center crop. Cross-dataset evaluation uses NWPU-RESISC45~\cite{cheng2017nwpu} as described in Section~\ref{sec:generalization}.
+
+\subsubsection{Implementation Details}
+The tokenizer receives $256\times256$ RGB images and produces a $16\times16$ token grid with latent dimension 256. Every codebook contains 1,024 entries. Models are trained for 50 epochs with batch size 16, AdamW, learning rate $10^{-4}$, gradient clipping, and bf16 automatic mixed precision. The frozen teacher is RemoteCLIP ViT-B/32, and the projection head has hidden dimension 512.
+
+\subsubsection{Evaluation Protocol and Comparisons}
+The internal baseline has the same architecture and training protocol but sets $\lambda=0$. Unless stated otherwise, results are means and standard deviations over model seeds 41, 42, and 43. External comparisons include ADJSCC, WebP/JPEG2000, and versions of the discrete and conventional representations protected by the same custom rate-1/2 sparse LDPC code with min-sum belief-propagation decoding. This code is not 5G NR LDPC.
+
+\subsection{Main Results}
+
+\subsubsection{Low-Rate Task Performance}
+\label{sec:low-rate}
+Table~\ref{tab:l0-main} compares the architecture-matched RVQ models. PSNR and LPIPS are included only to verify comparable reconstruction training; the task claim is supported by the L0 histogram accuracy.
+
+\begin{table}[!t]
+\centering
+\caption{Low-rate task-path performance over three model seeds.}
+\label{tab:l0-main}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Metric & No distillation & RemoteCLIP distillation \\ \midrule
+Best PSNR (dB) & $26.10\pm0.02$ & $25.89\pm0.07$ \\
+Best LPIPS & $0.172\pm0.001$ & $0.175\pm0.002$ \\
+No channel $h_0$ (\%) & $58.23\pm1.57$ & \textbf{$83.33\pm0.81$} \\
+AWGN $+5$ dB & $55.73\pm0.72$ & \textbf{$82.57\pm0.31$} \\
+AWGN $+10$ dB & $58.20\pm1.59$ & \textbf{$83.37\pm0.76$} \\
+Rayleigh $+5$ dB & $28.67\pm0.65$ & \textbf{$58.57\pm0.47$} \\
+Rayleigh $+10$ dB & $48.63\pm1.31$ & \textbf{$78.80\pm0.72$} \\ \bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{../../rstoken/figs/fig_exp_l0_task_robustness_v3.png}
+\caption{L0 task-path accuracy with and without RemoteCLIP distillation under no channel, AWGN, and Rayleigh fading.}
+\label{fig:l0-robustness}
+\end{figure}
+
+Without a channel, distillation improves $h_0$ accuracy by 25.10\pp. The gains are 26.83 and 25.17\pp at $+5$ and $+10$~dB AWGN, and 29.90 and 30.17\pp at the corresponding Rayleigh conditions. To exclude initialization-order effects, we also trained three paired baseline/distilled model pairs from bitwise-identical initial weights. The paired gains are $25.77\pm2.94$, $26.97\pm3.46$, $25.73\pm2.99$, $27.47\pm3.31$, and $28.83\pm3.35$\pp across the five channel conditions, consistent with Table~\ref{tab:l0-main}; per-seed results are reported in Appendix~\ref{app:paired}.
+
+\subsubsection{Effect of Distillation Position}
+\label{sec:position}
+We compare L0-only distillation, distillation of the summed RVQ representation, and L1-only distillation. The L0 and L1 columns use seed 42; the all-layer setting is repeated over seeds 41--43. The three settings share the teacher, architecture, losses, and training schedule.
+
+\begin{table*}[!t]
+\centering
+\caption{Distillation-position ablation. L0 and L1 use seed 42; all-layer distillation reports mean $\pm$ standard deviation over three seeds.}
+\label{tab:position}
+\scriptsize
+\setlength{\tabcolsep}{8pt}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Metric & L0 (main) & All layers & L1 \\ \midrule
+\multicolumn{4}{l}{\textit{$h_0$ accuracy at $k=1$ (\%)}} \\
+No channel & 82.6 & $81.60\pm0.40$ & 34.2 \\
+AWGN $+5$ dB & 82.1 & $79.90\pm0.46$ & 32.1 \\
+AWGN $+10$ dB & 82.6 & $81.60\pm0.40$ & 34.2 \\
+Rayleigh $+5$ dB & 58.6 & $47.77\pm2.16$ & 10.4 \\
+Rayleigh $+10$ dB & 77.7 & $74.53\pm0.49$ & 24.0 \\ \midrule
+\multicolumn{4}{l}{\textit{$k=4$ PSNR (dB)}} \\
+No channel & 25.92 & $25.68\pm0.06$ & 22.32 \\
+AWGN $+5$ dB & 23.94 & $23.74\pm0.06$ & 14.36 \\
+AWGN $+10$ dB & 25.92 & $25.68\pm0.06$ & 22.29 \\
+Rayleigh $+5$ dB & 16.93 & $16.62\pm0.07$ & 12.45 \\
+Rayleigh $+10$ dB & 20.63 & $20.38\pm0.09$ & 13.08 \\ \midrule
+\multicolumn{4}{l}{\textit{$k=4$ reconstructed-image classification (\%)}} \\
+No channel & 86.9 & $86.33\pm0.32$ & 35.3 \\
+AWGN $+5$ dB & 84.6 & $83.07\pm0.06$ & 3.7 \\
+AWGN $+10$ dB & 86.9 & $86.33\pm0.32$ & 35.2 \\
+Rayleigh $+5$ dB & 22.6 & $18.47\pm2.29$ & 2.8 \\
+Rayleigh $+10$ dB & 66.8 & $64.57\pm1.53$ & 3.0 \\ \midrule
+\multicolumn{4}{l}{\textit{Cumulative linear probe, no channel (\%)}} \\
+L0 & 86.0 & $85.90\pm0.44$ & 30.5 \\
+L0+L1 & 87.8 & $87.07\pm0.31$ & 33.7 \\
+L0+L1+L2 & 87.9 & $87.83\pm0.81$ & 35.8 \\
+L0+L1+L2+L3 & 87.9 & $87.90\pm0.53$ & 36.5 \\ \bottomrule
+\end{tabular}
+\end{table*}
+
+Moving the teacher loss to L1 degrades all four metric families. In particular, no-channel $h_0$ accuracy drops by 48.4\pp and PSNR by 3.60~dB. All-layer distillation is less destructive but its mean task and reconstruction results remain below the L0 setting. Because L0 and L1 are single-seed entries, Table~\ref{tab:position} is an intervention study rather than a complete significance test; full multi-seed replication of all three positions remains future work.
+
+\subsubsection{Progressive Reconstruction}
+\label{sec:progressive}
+Table~\ref{tab:progressive} evaluates only the reconstruction path. Every channel condition contains 1,000 AID test images, and the same channel-noise realizations are used across model seeds.
+
+\begin{table*}[!t]
+\centering
+\caption{Reconstruction performance across prefix lengths and channel conditions (three model seeds).}
+\label{tab:progressive}
+\scriptsize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}llrrrrr@{}}
+\toprule
+Channel & SNR & $k$ & Bits/image & PSNR (dB) & LPIPS $\downarrow$ & Class. (\%) \\ \midrule
+No channel & -- & 1 & 2,560 & $22.98\pm0.09$ & $0.284\pm0.002$ & $71.4\pm1.3$ \\
+& -- & 2 & 5,120 & $24.76\pm0.04$ & $0.205\pm0.001$ & $84.6\pm0.2$ \\
+& -- & 3 & 7,680 & $25.55\pm0.06$ & $0.183\pm0.002$ & $86.6\pm0.3$ \\
+& -- & 4 & 10,240 & $25.92\pm0.08$ & $0.175\pm0.002$ & $86.8\pm0.4$ \\ \midrule
+AWGN & $+5$ & 1 & 2,560 & $21.99\pm0.07$ & $0.313\pm0.002$ & $68.5\pm1.4$ \\
+& $+5$ & 2 & 5,120 & $23.24\pm0.02$ & $0.245\pm0.001$ & $80.6\pm0.5$ \\
+& $+5$ & 3 & 7,680 & $23.72\pm0.04$ & $0.225\pm0.002$ & $83.2\pm0.9$ \\
+& $+5$ & 4 & 10,240 & $23.94\pm0.09$ & $0.217\pm0.002$ & $84.4\pm0.9$ \\
+AWGN & $+10$ & 1 & 2,560 & $22.98\pm0.09$ & $0.284\pm0.002$ & $71.4\pm1.3$ \\
+& $+10$ & 2 & 5,120 & $24.76\pm0.04$ & $0.205\pm0.001$ & $84.6\pm0.2$ \\
+& $+10$ & 3 & 7,680 & $25.55\pm0.06$ & $0.183\pm0.001$ & $86.6\pm0.4$ \\
+& $+10$ & 4 & 10,240 & $25.92\pm0.08$ & $0.175\pm0.002$ & $86.8\pm0.4$ \\ \midrule
+Rayleigh & $+5$ & 1 & 2,560 & $16.95\pm0.05$ & $0.481\pm0.002$ & $22.0\pm1.5$ \\
+& $+5$ & 2 & 5,120 & $16.94\pm0.06$ & $0.470\pm0.003$ & $20.5\pm0.4$ \\
+& $+5$ & 3 & 7,680 & $16.90\pm0.05$ & $0.470\pm0.003$ & $19.7\pm1.3$ \\
+& $+5$ & 4 & 10,240 & $16.90\pm0.07$ & $0.471\pm0.003$ & $19.7\pm2.6$ \\
+Rayleigh & $+10$ & 1 & 2,560 & $19.87\pm0.07$ & $0.383\pm0.002$ & $55.2\pm1.9$ \\
+& $+10$ & 2 & 5,120 & $20.33\pm0.07$ & $0.342\pm0.003$ & $63.4\pm1.3$ \\
+& $+10$ & 3 & 7,680 & $20.50\pm0.04$ & $0.330\pm0.003$ & $65.1\pm0.7$ \\
+& $+10$ & 4 & 10,240 & $20.55\pm0.07$ & $0.326\pm0.003$ & $67.7\pm1.1$ \\ \bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{../../rstoken/figs/fig_exp_progressive_reconstruction_v3.png}
+\caption{Progressive reconstruction as additional RVQ layers are transmitted.}
+\label{fig:progressive}
+\end{figure}
+
+Without a channel, increasing $k$ from 1 to 4 improves PSNR by 2.94~dB, reduces LPIPS from 0.284 to 0.175, and raises reconstructed-image classification from 71.4\% to 86.8\%. AWGN preserves the same trend. At $+5$~dB Rayleigh, however, PSNR remains near 16.9~dB for every $k$, indicating that additional layers cannot compensate for severe index corruption. Partial progressivity returns at $+10$~dB Rayleigh.
+
+\subsubsection{SNR Sweep}
+A ten-point sweep over $\{-5,-2,0,2,5,7,10,12,15,20\}$~dB shows that the AWGN task gain peaks at 30.70\pp at $+2$~dB and converges to approximately 26.57\pp at high SNR. Under Rayleigh fading, the gain remains approximately 29.4--30.1\pp between $+5$ and $+10$~dB. The distilled and baseline models differ by less than 0.4~dB PSNR over the sweep. At $-5$~dB AWGN, both task accuracies approach the 30-class random level, marking the lower operating boundary of the current hard-decision discrete path.
+
+\subsection{Comparison with Existing Methods}
+
+\subsubsection{Comparison with ADJSCC}
+\label{sec:adjscc}
+ADJSCC is trained from scratch on AID at three rates and three random seeds. Its channel-symbol budgets are matched to RS-Token at $k=1,2,4$. Every batch samples AWGN or complex Rayleigh fading with equal probability, and SNR is uniform over $[-2,12]$~dB. Training epochs, batch size, optimizer, learning rate, and mixed precision match RS-Token. Table~\ref{tab:adjscc} reports the main $k=4$ comparison; Appendix~\ref{app:adjscc} gives all rates.
+
+\begin{table}[!t]
+\centering
+\caption{ADJSCC versus RS-Token at 10,240 bits/image over three model seeds.}
+\label{tab:adjscc}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}llrrr@{}}
+\toprule
+Metric & Channel & ADJSCC & RS-Token & $\Delta$ \\ \midrule
+PSNR & No channel & $28.23\pm0.03$ & $25.92\pm0.08$ & $-2.30$ \\
+(dB) & AWGN $+5$ & $27.06\pm0.01$ & $23.94\pm0.09$ & $-3.12$ \\
+& AWGN $+10$ & $27.81\pm0.02$ & $25.92\pm0.08$ & $-1.89$ \\
+& Rayleigh $+5$ & $24.97\pm0.01$ & $16.90\pm0.07$ & $-8.07$ \\
+& Rayleigh $+10$ & $26.45\pm0.01$ & $20.55\pm0.07$ & $-5.89$ \\ \midrule
+Class. & No channel & 80.00 & \textbf{86.80} & $+6.80$ \\
+(\%) & AWGN $+5$ & 71.43 & \textbf{84.40} & $+12.97$ \\
+& AWGN $+10$ & 77.43 & \textbf{86.80} & $+9.37$ \\
+& Rayleigh $+5$ & \textbf{51.57} & 19.73 & $-31.84$ \\
+& Rayleigh $+10$ & 68.03 & 67.73 & $-0.30$ \\ \bottomrule
+\end{tabular}
+\end{table}
+
+ADJSCC achieves 1.9--8.1~dB higher PSNR across all tested rates and channels, consistent with direct MSE optimization of a continuous latent. RS-Token preserves more reconstructed-image task accuracy under no channel and AWGN, especially at low rates. The trend reverses at $+5$~dB Rayleigh, where residual hard-decision errors severely damage discrete indices. The comparison therefore exposes a task-fidelity--PSNR trade-off rather than overall dominance by either method.
+
+\subsubsection{Comparison with Conventional Codecs and LDPC}
+\label{sec:ldpc}
+We set target transmitted-bit budgets of 5,120, 10,240, and 20,480 bits. All methods use the same custom rate-1/2 sparse LDPC code and min-sum decoder. RS-Token exactly matches the target source lengths; JPEG2000 differs by 0.1--4.0\%, while WebP produces 1.5--5.5 times more source bits and is therefore a non-rate-matched diagnostic reference.
+
+\begin{table*}[!t]
+\centering
+\caption{Target-rate comparison at $+10$~dB with the same custom rate-1/2 LDPC implementation. Results average five channel seeds.}
+\label{tab:ldpc}
+\scriptsize
+\setlength{\tabcolsep}{3.5pt}
+\begin{tabular}{@{}llrrrrrr@{}}
+\toprule
+Method & Channel & $k$ & Target bits & Actual source bits & Failure (\%) & Class. (\%) & Valid PSNR \\ \midrule
+RS-Token & AWGN & 1 & 5,120 & 2,560 & \textbf{0.0} & 70.3 & 22.95 \\
+JPEG2000 & AWGN & -- & 5,120 & 2,663 & 99.9 & 0.0 & -- \\
+WebP$^\dagger$ & AWGN & -- & 5,120 & 14,164 & 99.3 & 0.3 & -- \\
+RS-Token & AWGN & 2 & 10,240 & 5,120 & \textbf{0.0} & 84.3 & 24.77 \\
+JPEG2000 & AWGN & -- & 10,240 & 5,192 & 90.2 & 0.7 & -- \\
+WebP$^\dagger$ & AWGN & -- & 10,240 & 14,301 & 94.7 & 3.2 & -- \\
+RS-Token & AWGN & 4 & 20,480 & 10,240 & \textbf{0.0} & \textbf{86.9} & \textbf{25.92} \\
+JPEG2000 & AWGN & -- & 20,480 & 10,246 & 62.1 & 14.3 & -- \\
+WebP$^\dagger$ & AWGN & -- & 20,480 & 15,410 & 79.4 & 13.6 & -- \\ \midrule
+RS-Token & Rayleigh & 1 & 5,120 & 2,560 & \textbf{0.0} & 69.5 & 22.56 \\
+JPEG2000 & Rayleigh & -- & 5,120 & 2,663 & 99.9 & 0.0 & -- \\
+WebP$^\dagger$ & Rayleigh & -- & 5,120 & 14,164 & 100.0 & 0.0 & -- \\
+RS-Token & Rayleigh & 2 & 10,240 & 5,120 & \textbf{0.0} & 83.0 & 24.13 \\
+JPEG2000 & Rayleigh & -- & 10,240 & 5,192 & 92.8 & 0.5 & -- \\
+WebP$^\dagger$ & Rayleigh & -- & 10,240 & 14,301 & 100.0 & 0.0 & -- \\
+RS-Token & Rayleigh & 4 & 20,480 & 10,240 & \textbf{0.0} & \textbf{86.3} & \textbf{25.08} \\
+JPEG2000 & Rayleigh & -- & 20,480 & 10,246 & 71.6 & 1.3 & -- \\
+WebP$^\dagger$ & Rayleigh & -- & 20,480 & 15,410 & 100.0 & 0.0 & -- \\ \bottomrule
+\end{tabular}
+\begin{flushleft}
+$^\dagger$WebP does not meet the target source rate and is excluded from rate-matched conclusions.
+\end{flushleft}
+\end{table*}
+
+RS-Token has zero file-level failure in this implementation. The near-rate-matched JPEG2000 comparison fails on 62.1--99.9\% of AWGN images and 71.6--99.9\% of Rayleigh images. The observed difference is consistent with local index errors remaining decodable, whereas residual errors in an entropy-coded file can invalidate the entire container. These results apply only to the custom LDPC implementation and should not be extrapolated to 5G NR or a complete standardized link.
+
+\subsection{Cross-Dataset Generalization}
+\label{sec:generalization}
+The AID-trained encoder, codebooks, and decoder are frozen and applied directly to NWPU-RESISC45. Only the $h_0$ linear classifier and the reconstructed-image ResNet34 evaluator are refit on the standard 60/20/20 split. The latter reaches 95.17\% test accuracy and 0.9518 macro-F1. Table~\ref{tab:nwpu} reports seed 42 on 6,300 test images per channel condition.
+
+\begin{table*}[!t]
+\centering
+\caption{Cross-dataset transfer from AID to NWPU-RESISC45 with a frozen tokenizer.}
+\label{tab:nwpu}
+\scriptsize
+\setlength{\tabcolsep}{2.7pt}
+\begin{tabular}{@{}llrrrrrrr@{}}
+\toprule
+Channel & SNR & Dist. $h_0$ & Base $h_0$ & $\Delta h_0$ & Dist. PSNR & Dist. class. & Base PSNR & Base class. \\ \midrule
+No channel & -- & 64.37 & 43.49 & $+20.87$ & 27.09 & 80.59 & 27.37 & 78.08 \\
+AWGN & $+5$ & 61.38 & 41.68 & $+19.70$ & 24.80 & 76.25 & 24.63 & 72.60 \\
+AWGN & $+10$ & 64.38 & 43.48 & $+20.90$ & 27.08 & 80.60 & 27.37 & 78.10 \\
+Rayleigh & $+5$ & 30.73 & 16.79 & $+13.94$ & 17.42 & 18.24 & 16.82 & 15.48 \\
+Rayleigh & $+10$ & 53.54 & 33.71 & $+19.83$ & 21.20 & 56.76 & 20.71 & 49.22 \\ \bottomrule
+\end{tabular}
+\end{table*}
+
+The no-channel distillation gain remains 20.87\pp, compared with 26.57\pp for the matched AID seed. Absolute accuracy decreases under dataset shift, but the gain over the baseline persists. This is evidence of partial transfer, not invariance to arbitrary remote-sensing domains.
+
+\subsection{Unprotected Conventional-Bitstream Stress Test}
+\label{sec:unprotected}
+WebP and JPEG2000 target 2,560, 5,120, and 10,240 source bits and are sent directly over BPSK without channel coding. Failure denotes an undecodable file; classification counts failed images as errors, while valid PSNR uses successful decodes only.
+
+\begin{table*}[!t]
+\centering
+\caption{Stress test of unprotected WebP and JPEG2000 bitstreams.}
+\label{tab:unprotected}
+\scriptsize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}llrrrrr@{}}
+\toprule
+Method & Channel/SNR & Target bits & Actual bits & Failure & Class. (\%) & Valid PSNR \\ \midrule
+WebP & No channel & 2,560 & 14,164 & 0.000 & 61.8 & 26.56 \\
+WebP & AWGN $+10$ & 2,560 & 14,164 & 0.039 & 58.8 & 26.51 \\
+WebP & Rayleigh $+10$ & 2,560 & 14,164 & 0.999 & 0.0 & 10.52 \\
+WebP & No channel & 5,120 & 14,301 & 0.000 & 62.6 & 26.65 \\
+WebP & AWGN $+10$ & 5,120 & 14,301 & 0.045 & 59.9 & 26.63 \\
+WebP & Rayleigh $+10$ & 5,120 & 14,301 & 1.000 & 0.0 & -- \\
+WebP & No channel & 10,240 & 15,410 & 0.000 & 67.5 & 27.04 \\
+WebP & AWGN $+10$ & 10,240 & 15,410 & 0.041 & 64.5 & 26.97 \\
+WebP & Rayleigh $+10$ & 10,240 & 15,410 & 1.000 & 0.0 & -- \\ \midrule
+JPEG2000 & No channel & 2,560 & 2,663 & 0.000 & 6.5 & 20.19 \\
+JPEG2000 & AWGN $+10$ & 2,560 & 2,663 & 0.003 & 6.6 & 20.11 \\
+JPEG2000 & Rayleigh $+10$ & 2,560 & 2,663 & 1.000 & 0.0 & -- \\
+JPEG2000 & No channel & 5,120 & 5,192 & 0.000 & 11.0 & 22.35 \\
+JPEG2000 & AWGN $+10$ & 5,120 & 5,192 & 0.001 & 10.9 & 22.27 \\
+JPEG2000 & Rayleigh $+10$ & 5,120 & 5,192 & 1.000 & 0.0 & -- \\
+JPEG2000 & No channel & 10,240 & 10,246 & 0.000 & 39.6 & 23.97 \\
+JPEG2000 & AWGN $+10$ & 10,240 & 10,246 & 0.004 & 38.9 & 23.90 \\
+JPEG2000 & Rayleigh $+10$ & 10,240 & 10,246 & 1.000 & 0.0 & -- \\ \bottomrule
+\end{tabular}
+\end{table*}
+
+The stress test shows file-level vulnerability without error correction, especially under Rayleigh fading. It is not a substitute for the architecture-matched RVQ baseline or for an engineered codec--channel-code--retransmission system.
+
+\subsection{Ablation Studies}
+
+\subsubsection{RVQ Depth}
+\label{sec:ablation-depth}
+All settings use seed 42 and change only $K$. Each layer adds 2,560 bits/image.
+
+\begin{table*}[!t]
+\centering
+\caption{RVQ-depth ablation using the full $K$-layer prefix.}
+\label{tab:depth}
+\scriptsize
+\begin{tabular}{@{}rrrrrrrr@{}}
+\toprule
+$K$ & Full bits & $h_0$ no ch. & $h_0$ AWGN $+5$ & $h_0$ Ray. $+5$ & $h_0$ Ray. $+10$ & PSNR no ch. & PSNR Ray. $+10$ \\ \midrule
+2 & 5,120 & 84.00 & 83.30 & 59.10 & 79.40 & 24.71 & 20.39 \\
+3 & 7,680 & 84.30 & 84.70 & 54.50 & 77.90 & 25.44 & 20.41 \\
+4 & 10,240 & 82.60 & 80.80 & 61.50 & 78.40 & 25.92 & 20.55 \\
+6 & 15,360 & 82.10 & 81.50 & 54.90 & 75.20 & 26.58 & 20.79 \\ \bottomrule
+\end{tabular}
+\end{table*}
+
+$K=3$ improves the no-channel task result by 1.7\pp and saves 2,560 bits, whereas $K=6$ improves PSNR by 0.66~dB at 50\% greater rate. Since all depths exceed 82\% no-channel $h_0$ accuracy, we use $K=4$ as the smallest configuration reaching approximately 25.9~dB PSNR within a 10,240-bit information budget.
+
+\subsubsection{Encoder Architecture}
+The DCRC control removes the CNN encoder, projects the frozen 512-dimensional RemoteCLIP embedding into 256 tokens, and retains the same four-layer RVQ and decoder. Across three seeds, DCRC reaches $96.00\pm0.62\%$ no-channel $h_0$ accuracy, but only $17.85\pm0.01$~dB $k=4$ PSNR and 11.43\% reconstructed-image classification. Increasing $k$ from 1 to 4 adds only 0.09~dB. Thus a discriminative global embedding cannot replace a generative image representation when both task and reconstruction paths are required. Appendix~\ref{app:dcrc} reports the full results.
+
+\subsubsection{Teacher Model}
+Table~\ref{tab:teacher} changes only the teacher and seed-matches RemoteCLIP to OpenAI CLIP.
+
+\begin{table}[!t]
+\centering
+\caption{Teacher-model ablation (seed 42).}
+\label{tab:teacher}
+\scriptsize
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Metric & RemoteCLIP & OpenAI CLIP & $\Delta$ \\ \midrule
+$h_0$, no channel (\%) & 82.6 & 80.8 & $+1.8$ \\
+$h_0$, AWGN $+5$ & 82.5 & 78.8 & $+3.7$ \\
+$h_0$, AWGN $+10$ & 82.6 & 80.8 & $+1.8$ \\
+$h_0$, Rayleigh $+5$ & 59.8 & 53.8 & $+6.0$ \\
+$h_0$, Rayleigh $+10$ & 79.2 & 74.4 & $+4.8$ \\
+$k=4$ PSNR, no ch. & 25.92 & 26.03 & $-0.11$ \\
+$k=4$ class., no ch. & 86.9 & 86.6 & $+0.3$ \\ \bottomrule
+\end{tabular}
+\end{table}
+
+RemoteCLIP contributes a bounded 1.8--6.0\pp domain-specific task gain, while reconstruction differs by at most 0.11~dB and 0.3\pp. The primary mechanism is therefore vision-language distillation; the remote-sensing teacher supplies an additional domain advantage.
+
+\subsubsection{Distillation Weight}
+\begin{table}[!t]
+\centering
+\caption{Distillation-weight ablation (seed 42).}
+\label{tab:lambda}
+\scriptsize
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Metric & $\lambda=0.1$ & $\lambda=0.5$ & $\lambda=1.0$ \\ \midrule
+$h_0$, no channel (\%) & 71.2 & 82.4 & \textbf{84.5} \\
+$h_0$, AWGN $+10$ & 71.2 & 82.5 & \textbf{84.5} \\
+$h_0$, AWGN $+5$ & 69.2 & 82.3 & \textbf{83.3} \\
+$h_0$, Rayleigh $+10$ & 64.3 & \textbf{79.0} & 77.6 \\
+$h_0$, Rayleigh $+5$ & 42.1 & \textbf{59.1} & 49.8 \\
+$k=4$ PSNR, no ch. & \textbf{26.20} & 25.92 & 25.64 \\
+$k=4$ LPIPS, no ch. & \textbf{0.165} & 0.176 & 0.185 \\ \bottomrule
+\end{tabular}
+\end{table}
+
+Increasing $\lambda$ improves no-channel and AWGN task accuracy but reduces reconstruction quality. Under Rayleigh fading, $\lambda=0.5$ is more robust than $\lambda=1.0$. We therefore use $\lambda=0.5$ as a compromise, not as a universal optimum.
+
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{Layer Specialization and the Task--Reconstruction Trade-off}
+The main result and the position intervention jointly indicate that L0 discriminability arises from the placement of vision-language supervision rather than an inherent semantic privilege of the first residual layer. This observation is consistent with foundation-model supervision of vector-quantized tokenizers~\cite{beitv2}, but the claim is deliberately restricted to the L0 scene-level path. Subsequent layers are supported by reconstruction metrics, not by the $h_0$ classifier.
+
+Layer specialization does not remove the conflict between task and reconstruction objectives. DCRC further improves task accuracy but loses progressive reconstruction, while larger distillation weights trade pixel quality for semantics. The CNN encoder, multi-layer RVQ, and intermediate $\lambda$ jointly occupy a compromise region. Likewise, RemoteCLIP provides a bounded domain gain over OpenAI CLIP; the principal mechanism is hierarchical vision-language distillation rather than exclusivity of one teacher.
+
+The ADJSCC comparison exposes a second trade-off. Continuous deep-JSCC directly optimizes image distortion and is stronger in PSNR, whereas the discrete distilled representation preserves more task-relevant information under no channel and AWGN at low rates. Hard-decision indices are more sensitive to residual errors under severe Rayleigh fading. RS-Token is therefore an alternative design point for a discrete task-oriented interface, not a replacement for continuous JSCC in every channel regime.
+
+\subsection{System Interpretation and Deployment}
+RS-Token is an application representation above physical- and link-layer reliability mechanisms. It does not replace HARQ, adaptive modulation and coding, or LDPC. A system may send only L0 for an alert and request L1--L3 when visual review is required. Section~\ref{sec:ldpc} demonstrates compatibility with one channel-code implementation, but layer selection, retransmission, modulation, and coding have not been jointly optimized.
+
+The deployed encoder and decoder contain 10.87 million parameters and require 38.31 GFLOPs per $256\times256$ image. Measured single-image latency is 8.59~ms on a GPU and 66.70~ms on a single CPU thread. The approximately 150-million-parameter teacher is discarded after training, and the receiver stores approximately 8~MB of fp32 codebooks. These measurements establish the resource scale; deployment on a specific edge platform still requires power, memory-bandwidth, and concurrency evaluation.
+
+\subsection{Limitations}
+First, task evaluation is limited to image-level scene classification on AID and NWPU-RESISC45. The histogram discards spatial arrangement and cannot establish detection or segmentation performance. Second, the main comparisons use three seeds, but L1-position, teacher, RVQ-depth, and cross-dataset settings include single-seed results. Third, the channel-code comparison uses a custom rate-1/2 sparse LDPC implementation rather than 5G NR and omits HARQ, soft decoding, and adaptive modulation. Fourth, the modern deep-JSCC comparison covers only ADJSCC; newer systems may move the measured Pareto frontier. These boundaries motivate broader tasks, domains, standardized links, and baselines.
+
+\section{Conclusion}
+\label{sec:conclusion}
+RS-Token uses RemoteCLIP supervision on the first RVQ layer to provide a low-rate scene-task path while retaining later layers for progressive image reconstruction. Across three AID seeds, distillation improves L0 task accuracy by approximately 25\pp, and the gain remains large under AWGN. Position, initialization, encoder, depth, teacher, loss-weight, and cross-dataset studies delimit the mechanism and its trade-offs. Comparisons with ADJSCC and conventional digital transmission show that the proposed representation is favorable for low-rate task fidelity in the tested AWGN regime, while continuous deep-JSCC remains stronger under severe Rayleigh fading. The results support hierarchical distilled tokens as a useful remote-sensing communication interface, subject to the stated task, channel, and domain limitations.
+
+\appendices
+
+\section{Full ADJSCC Comparison}
+\label{app:adjscc}
+
+\begin{table*}[!t]
+\centering
+\caption{PSNR comparison between ADJSCC and RS-Token over three model seeds.}
+\scriptsize
+\begin{tabular}{@{}rrlrrr@{}}
+\toprule
+Bits/image & $k$ & Channel & ADJSCC & RS-Token & $\Delta$ (RS--ADJSCC) \\ \midrule
+2,560 & 1 & No channel & $25.71\pm0.03$ & $22.98\pm0.09$ & $-2.73$ \\
+2,560 & 1 & AWGN $+5$ & $24.64\pm0.02$ & $21.99\pm0.07$ & $-2.65$ \\
+2,560 & 1 & AWGN $+10$ & $25.33\pm0.03$ & $22.98\pm0.09$ & $-2.35$ \\
+2,560 & 1 & Rayleigh $+5$ & $23.18\pm0.01$ & $16.95\pm0.05$ & $-6.23$ \\
+2,560 & 1 & Rayleigh $+10$ & $24.34\pm0.03$ & $19.87\pm0.07$ & $-4.47$ \\
+5,120 & 2 & No channel & $27.21\pm0.03$ & $24.76\pm0.04$ & $-2.45$ \\
+5,120 & 2 & AWGN $+5$ & $25.94\pm0.02$ & $23.24\pm0.02$ & $-2.71$ \\
+5,120 & 2 & AWGN $+10$ & $26.76\pm0.02$ & $24.76\pm0.04$ & $-1.99$ \\
+5,120 & 2 & Rayleigh $+5$ & $24.10\pm0.01$ & $16.94\pm0.06$ & $-7.16$ \\
+5,120 & 2 & Rayleigh $+10$ & $25.47\pm0.02$ & $20.33\pm0.07$ & $-5.14$ \\
+10,240 & 4 & No channel & $28.23\pm0.03$ & $25.92\pm0.08$ & $-2.30$ \\
+10,240 & 4 & AWGN $+5$ & $27.06\pm0.01$ & $23.94\pm0.09$ & $-3.12$ \\
+10,240 & 4 & AWGN $+10$ & $27.81\pm0.02$ & $25.92\pm0.08$ & $-1.89$ \\
+10,240 & 4 & Rayleigh $+5$ & $24.97\pm0.01$ & $16.90\pm0.07$ & $-8.07$ \\
+10,240 & 4 & Rayleigh $+10$ & $26.45\pm0.01$ & $20.55\pm0.07$ & $-5.89$ \\ \bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{table*}[!t]
+\centering
+\caption{Reconstructed-image classification accuracy (\%) for ADJSCC and RS-Token.}
+\scriptsize
+\begin{tabular}{@{}rrlrrr@{}}
+\toprule
+Bits/image & $k$ & Channel & ADJSCC & RS-Token & $\Delta$ (pp) \\ \midrule
+2,560 & 1 & No channel & 52.87 & 71.37 & $+18.50$ \\
+2,560 & 1 & AWGN $+5$ & 38.70 & 68.47 & $+29.77$ \\
+2,560 & 1 & AWGN $+10$ & 49.17 & 71.37 & $+22.20$ \\
+2,560 & 1 & Rayleigh $+5$ & 22.63 & 22.00 & $-0.63$ \\
+2,560 & 1 & Rayleigh $+10$ & 38.40 & 55.17 & $+16.77$ \\
+5,120 & 2 & No channel & 70.77 & 84.57 & $+13.80$ \\
+5,120 & 2 & AWGN $+5$ & 58.67 & 80.60 & $+21.93$ \\
+5,120 & 2 & AWGN $+10$ & 68.17 & 84.60 & $+16.43$ \\
+5,120 & 2 & Rayleigh $+5$ & 38.67 & 20.50 & $-18.17$ \\
+5,120 & 2 & Rayleigh $+10$ & 55.70 & 63.40 & $+7.70$ \\
+10,240 & 4 & No channel & 80.00 & 86.80 & $+6.80$ \\
+10,240 & 4 & AWGN $+5$ & 71.43 & 84.40 & $+12.97$ \\
+10,240 & 4 & AWGN $+10$ & 77.43 & 86.80 & $+9.37$ \\
+10,240 & 4 & Rayleigh $+5$ & 51.57 & 19.73 & $-31.84$ \\
+10,240 & 4 & Rayleigh $+10$ & 68.03 & 67.73 & $-0.30$ \\ \bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{table}[!t]
+\centering
+\caption{Selected LPIPS results (lower is better).}
+\scriptsize
+\begin{tabular}{@{}rrlrr@{}}
+\toprule
+Bits & $k$ & Channel & ADJSCC & RS-Token \\ \midrule
+2,560 & 1 & No channel & 0.5398 & 0.2841 \\
+2,560 & 1 & Rayleigh $+5$ & 0.6350 & 0.4815 \\
+5,120 & 2 & No channel & 0.4321 & 0.2054 \\
+10,240 & 4 & No channel & 0.3856 & 0.1748 \\
+10,240 & 4 & AWGN $+10$ & 0.3979 & 0.1748 \\
+10,240 & 4 & Rayleigh $+5$ & 0.5093 & 0.4706 \\ \bottomrule
+\end{tabular}
+\end{table}
+
+\FloatBarrier
+
+\section{Direct-Quantize-RemoteCLIP Control}
+\label{app:dcrc}
+
+\begin{table}[!t]
+\centering
+\caption{DCRC task-path accuracy over three seeds.}
+\scriptsize
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Channel & DCRC $h_0$ & RS-Token $h_0$ & $\Delta$ \\ \midrule
+No channel & $96.00\pm0.62$ & $82.63\pm1.05$ & $+13.37$ \\
+AWGN $+5$ & $95.83\pm0.06$ & $80.60\pm0.72$ & $+15.23$ \\
+AWGN $+10$ & $96.00\pm0.62$ & $82.63\pm1.05$ & $+13.37$ \\
+Rayleigh $+5$ & $81.70\pm1.47$ & $58.17\pm3.17$ & $+23.53$ \\
+Rayleigh $+10$ & $93.77\pm0.06$ & $76.70\pm1.70$ & $+17.07$ \\ \bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table*}[!t]
+\centering
+\caption{DCRC and RS-Token reconstruction at $k=4$ over three seeds.}
+\scriptsize
+\setlength{\tabcolsep}{2.8pt}
+\begin{tabular}{@{}lrrrrrrr@{}}
+\toprule
+Channel & DCRC PSNR & RS PSNR & $\Delta$ & DCRC LPIPS & RS LPIPS & DCRC class. & RS class. \\ \midrule
+No channel & 17.85 & 25.92 & $-8.07$ & 0.376 & 0.175 & 11.43 & 86.80 \\
+AWGN $+5$ & 17.27 & 23.94 & $-6.66$ & 0.423 & 0.217 & 9.70 & 84.40 \\
+AWGN $+10$ & 17.85 & 25.92 & $-8.07$ & 0.376 & 0.175 & 11.40 & 86.80 \\
+Rayleigh $+5$ & 14.71 & 16.90 & $-2.19$ & 0.670 & 0.471 & 4.00 & 19.73 \\
+Rayleigh $+10$ & 15.90 & 20.55 & $-4.65$ & 0.542 & 0.326 & 7.30 & 67.73 \\ \bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{table}[!t]
+\centering
+\caption{No-channel progressive reconstruction for DCRC.}
+\scriptsize
+\begin{tabular}{@{}rrrrr@{}}
+\toprule
+$k$ & Bits & DCRC PSNR & RS PSNR & DCRC/RS class. \\ \midrule
+1 & 2,560 & 17.76 & 22.98 & 10.90 / 71.37 \\
+2 & 5,120 & 17.84 & 24.76 & 11.37 / 84.57 \\
+3 & 7,680 & 17.85 & 25.55 & 11.53 / 86.63 \\
+4 & 10,240 & 17.85 & 25.92 & 11.43 / 86.80 \\ \bottomrule
+\end{tabular}
+\end{table}
+
+\FloatBarrier
+
+\section{Paired-Initialization Control}
+\label{app:paired}
+
+\begin{table*}[!t]
+\centering
+\caption{Per-seed paired-initialization task results.}
+\scriptsize
+\begin{tabular}{@{}rlrrr@{}}
+\toprule
+Seed & Channel & Baseline $h_0$ & Distilled $h_0$ & $\Delta$ (pp) \\ \midrule
+41 & No channel & 55.00 & 83.40 & $+28.40$ \\
+41 & AWGN $+5$ & 52.70 & 83.30 & $+30.60$ \\
+41 & AWGN $+10$ & 55.00 & 83.40 & $+28.40$ \\
+41 & Rayleigh $+5$ & 26.70 & 57.60 & $+30.90$ \\
+41 & Rayleigh $+10$ & 46.30 & 78.90 & $+32.60$ \\
+42 & No channel & 58.30 & 84.60 & $+26.30$ \\
+42 & AWGN $+5$ & 56.70 & 83.30 & $+26.60$ \\
+42 & AWGN $+10$ & 58.30 & 84.60 & $+26.30$ \\
+42 & Rayleigh $+5$ & 29.30 & 53.60 & $+24.30$ \\
+42 & Rayleigh $+10$ & 50.50 & 78.20 & $+27.70$ \\
+43 & No channel & 59.80 & 82.40 & $+22.60$ \\
+43 & AWGN $+5$ & 57.30 & 81.00 & $+23.70$ \\
+43 & AWGN $+10$ & 59.80 & 82.30 & $+22.50$ \\
+43 & Rayleigh $+5$ & 29.20 & 56.40 & $+27.20$ \\
+43 & Rayleigh $+10$ & 49.70 & 75.90 & $+26.20$ \\ \bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{table}[!t]
+\centering
+\caption{Paired versus non-paired distillation gains.}
+\scriptsize
+\begin{tabular}{@{}lrr@{}}
+\toprule
+Channel & Non-paired $\Delta$ & Paired $\Delta$ \\ \midrule
+No channel & $+25.10$ & $+25.77\pm2.94$ \\
+AWGN $+5$ & $+26.83$ & $+26.97\pm3.46$ \\
+AWGN $+10$ & $+25.17$ & $+25.73\pm2.99$ \\
+Rayleigh $+5$ & $+29.90$ & $+27.47\pm3.31$ \\
+Rayleigh $+10$ & $+30.17$ & $+28.83\pm3.35$ \\ \bottomrule
+\end{tabular}
+\end{table}
+
+\FloatBarrier
+
+\bibliographystyle{IEEEtran}
+\bibliography{rs_token}
+
+\end{document}

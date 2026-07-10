@@ -1,0 +1,39 @@
+name: rstoken
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      # ==========================================================
+      # PyTorch for Blackwell (sm_120, RTX 50 series).
+      # 普通 stable 不支持 sm_120, 必须用 cu128 wheel (PyTorch >= 2.7).
+      # 安装命令(写在 README 里, 不在这里执行):
+      #   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+      # 装完后用 scripts/00_check_env.py 验证 cuda.is_available()
+      # ==========================================================
+
+      # Core libs
+      - vector-quantize-pytorch>=1.14.0   # lucidrains, 自带 ResidualVQ
+      - open_clip_torch>=2.24.0           # RemoteCLIP 兼容此接口
+      - einops
+      - timm
+      - lpips                              # 感知损失
+      - tqdm
+      - pyyaml
+      - rich                               # 漂亮 log
+
+      # Data / 评测
+      - scikit-learn                       # 线性 SVM 评测第一层索引
+      - scipy
+      - pandas
+
+      # 实验跟踪 (二选一即可)
+      - wandb
+
+      # 工具
+      - matplotlib
+      - seaborn
+      - jupyter

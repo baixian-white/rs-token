@@ -1,0 +1,9 @@
+# E36 — data override for v0.4 checkpoints whose cfg.data.splits_dir
+# still points to the old H:/H-CODE/... path. Only `data` is overridden;
+# encoder/quantizer/decoder weights and num_classes (30, AID) are unchanged.
+data:
+  splits_dir: D:/CODE/遥感+通信/遥感+通信/rstoken/data/AID_splits_local
+  image_size: 256
+  batch_size: 64
+  num_workers: 4
+  pin_memory: true

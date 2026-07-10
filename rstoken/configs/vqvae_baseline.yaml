@@ -1,0 +1,51 @@
+# Stage 1 单层 VQ-VAE baseline
+# 目标: 在 AID 上跑通重建, val PSNR ≥ 24 dB, codebook 利用率 ≥ 60%
+# 所有路径相对项目根 (rstoken/)
+
+run_name: vqvae_baseline_v1
+seed: 42
+
+data:
+  splits_dir: H:/H-CODE/遥感+通信/rstoken/data/AID_splits
+  image_size: 256
+  batch_size: 16
+  num_workers: 4
+  pin_memory: true
+
+model:
+  in_channels: 3
+  base_channels: 64
+  channel_multipliers: [1, 2, 4, 4]      # 通道: 64 -> 128 -> 256 -> 256
+  num_res_blocks: 1
+  latent_dim: 256
+  codebook_size: 1024
+  commitment_weight: 0.25
+  quantizer: vq                            # Stage 1 = vq, Stage 2 = rvq
+
+optim:
+  lr: 1.0e-4
+  weight_decay: 0.0
+  betas: [0.9, 0.95]
+  warmup_steps: 500
+  total_epochs: 50
+  grad_clip: 1.0
+
+loss:
+  l1_weight: 1.0
+  lpips_weight: 0.1
+  vq_weight: 1.0
+  lpips_net: alex                          # alex (轻) / vgg
+
+logging:
+  log_every: 50                            # train log 步数间隔
+  val_every_epoch: 1                       # 多少 epoch 跑一次 val
+  save_every_epoch: 5                      # 多少 epoch 存一次 ckpt
+  num_vis_samples: 8                       # val 可视化几张图
+  use_wandb: false                         # 默认关, 用户开 export WANDB_API_KEY 后改 true
+  wandb_project: rstoken
+  ckpt_dir: H:/H-CODE/遥感+通信/rstoken/checkpoints/vqvae_baseline
+  log_dir:  H:/H-CODE/遥感+通信/rstoken/logs/vqvae_baseline
+
+device: cuda
+amp: true                                  # bf16 / fp16 自动混合精度
+amp_dtype: bf16                            # bf16 在 5070 Ti 上更稳, 不用 grad scaler

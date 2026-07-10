@@ -1,0 +1,65 @@
+# E8 教师消融对照: OpenAI CLIP-ViT-B/32 替代 RemoteCLIP-ViT-B/32
+# 与 rvq_distill.yaml 的唯一差异是 teacher_ckpt = "openai", 其它超参 100% 一致.
+#
+# motivation §5.1 给出 RemoteCLIP-ViT-B linear probe 95.95% > OpenAI CLIP-ViT-B 94.95%,
+# 但只差 1pp. 本实验回答 "蒸馏后 +24.7pp 是 RemoteCLIP 的功劳, 还是任何 CLIP 都行?"
+#
+# 判据:
+#   - RemoteCLIP - OpenAI CLIP 差 ≥ 7pp → 护城河成立
+#   - 差 < 3pp                          → 护城河窄, 卖点改成"分层蒸馏机制"
+#   - 中间                              → 诚实给出"边际收益 X pp"
+
+run_name: rvq_distill_openai
+seed: 42
+
+data:
+  splits_dir: H:/H-CODE/遥感+通信/rstoken/data/AID_splits
+  image_size: 256
+  batch_size: 16
+  num_workers: 4
+  pin_memory: true
+
+model:
+  in_channels: 3
+  base_channels: 64
+  channel_multipliers: [1, 2, 4, 4]
+  num_res_blocks: 1
+  latent_dim: 256
+  codebook_size: 1024
+  commitment_weight: 0.25
+  quantizer: rvq
+  rvq_num_quantizers: 4
+
+distill:
+  teacher_ckpt: openai                       # ← E8 关键: 用 OpenAI CLIP 替代 RemoteCLIP
+  teacher_name: ViT-B-32
+  head_hidden: 512
+
+optim:
+  lr: 1.0e-4
+  weight_decay: 0.0
+  betas: [0.9, 0.95]
+  warmup_steps: 500
+  total_epochs: 50
+  grad_clip: 1.0
+
+loss:
+  l1_weight: 1.0
+  lpips_weight: 0.1
+  vq_weight: 1.0
+  distill_weight: 0.5
+  lpips_net: alex
+
+logging:
+  log_every: 50
+  val_every_epoch: 1
+  save_every_epoch: 5
+  num_vis_samples: 8
+  use_wandb: false
+  wandb_project: rstoken
+  ckpt_dir: H:/H-CODE/遥感+通信/rstoken/checkpoints/rvq_distill_openai
+  log_dir:  H:/H-CODE/遥感+通信/rstoken/logs/rvq_distill_openai
+
+device: cuda
+amp: true
+amp_dtype: bf16

@@ -1,0 +1,39 @@
+# E39 — NWPU-RESISC45 ResNet34 classifier (clean-image evaluator).
+# Same recipe as configs/aid_classifier_resnet34.yaml, only num_classes
+# (30 -> 45) and data/output paths differ. Used as the recon-cls evaluator
+# for the NWPU zero-shot reconstruction transfer in §IV-F (E39).
+
+run_name: nwpu_classifier_resnet34
+seed: 42
+
+data:
+  splits_dir: data/NWPU_splits
+  image_size: 224
+  batch_size: 64
+  num_workers: 4
+  pin_memory: true
+
+model:
+  backbone: resnet34
+  num_classes: 45
+  pretrained: true
+
+optim:
+  name: adamw
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  betas: [0.9, 0.999]
+  total_epochs: 50
+  grad_clip: 1.0
+
+scheduler:
+  name: cosine
+  min_lr: 1.0e-6
+
+logging:
+  ckpt_dir: checkpoints/paper_v05/nwpu_classifier_resnet34
+  log_dir: logs/paper_v05/nwpu_classifier_resnet34
+
+device: cuda
+amp: true
+amp_dtype: bf16

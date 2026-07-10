@@ -1,0 +1,15 @@
+# E39 — data override for NWPU-RESISC45 zero-shot transfer eval.
+# `09_eval_rvqs_recon_task_split.py --data_yaml` overlays this onto
+# `cfg["data"]` baked into the v0.4 RVQ checkpoints. The encoder /
+# quantizer / decoder weights are not retrained; only the data source
+# is swapped, and the h0/L0_bow probe is re-fit on NWPU train indices.
+# image_size stays 256 to match the encoder's training-time spatial grid;
+# the recon-cls classifier (NWPU 45-class ResNet34 trained at 224) is
+# applied on the [0,1] reconstructions in models.py reconstruction_metrics
+# and tolerates the larger spatial resolution (ResNet GAP is size-agnostic).
+data:
+  splits_dir: data/NWPU_splits
+  image_size: 256
+  batch_size: 64
+  num_workers: 4
+  pin_memory: true

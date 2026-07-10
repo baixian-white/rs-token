@@ -1,0 +1,40 @@
+# ADJSCC training config — E35.
+# Channel uses per image = 16*16*40 = 10240; matches RS-Token at k=4 bits.
+
+run_name: adjscc_b10240_s42
+seed: 42
+
+data:
+  splits_dir: D:/CODE/遥感+通信/遥感+通信/rstoken/data/AID_splits_local
+  image_size: 256
+  batch_size: 16
+  num_workers: 4
+  pin_memory: true
+
+model:
+  image_size: 256
+  in_channels: 3
+  base_channels: 64
+  n_symbol_channels: 40
+  af_hidden: 64
+  train_snr_min: -2.0
+  train_snr_max: 12.0
+  train_channel: mixed
+
+optim:
+  lr: 1.0e-4
+  weight_decay: 0.0
+  betas: [0.9, 0.95]
+  warmup_steps: 500
+  total_epochs: 50
+  grad_clip: 1.0
+
+logging:
+  log_every: 100
+  save_every_epoch: 10
+  ckpt_dir: D:/CODE/遥感+通信/遥感+通信/rstoken/checkpoints/paper_v05/adjscc_b10240_s42
+  log_dir:  D:/CODE/遥感+通信/遥感+通信/rstoken/logs/paper_v05/adjscc_b10240_s42
+
+device: cuda
+amp: true
+amp_dtype: bf16

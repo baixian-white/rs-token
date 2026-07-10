@@ -1,0 +1,19 @@
+# E40 — step-0 init dump config, seed 43.
+# dump_rvq_init.py only reads `seed` and `model` blocks.
+
+run_name: rvq_init_s43
+seed: 43
+
+model:
+  in_channels: 3
+  base_channels: 64
+  channel_multipliers: [1, 2, 4, 4]
+  num_res_blocks: 1
+  latent_dim: 256
+  codebook_size: 1024
+  commitment_weight: 0.25
+  quantizer: rvq
+  rvq_num_quantizers: 4
+
+logging:
+  ckpt_dir: D:/CODE/遥感+通信/遥感+通信/rstoken/checkpoints/paper_v05/rvq_init_s43
