@@ -258,7 +258,7 @@ Rayleigh & $+10$ & 1 & 2,560 & $19.87\pm0.07$ & $0.383\pm0.002$ & $55.2\pm1.9$ \
 Without a channel, increasing $k$ from 1 to 4 improves PSNR by 2.94~dB, reduces LPIPS from 0.284 to 0.175, and raises reconstructed-image classification from 71.4\% to 86.8\%. AWGN preserves the same trend. At $+5$~dB Rayleigh, however, PSNR remains near 16.9~dB for every $k$, indicating that additional layers cannot compensate for severe index corruption. Partial progressivity returns at $+10$~dB Rayleigh.
 
 \subsubsection{SNR Sweep}
-A ten-point sweep over $\{-5,-2,0,2,5,7,10,12,15,20\}$~dB shows that the AWGN task gain peaks at 30.70\pp at $+2$~dB and converges to approximately 26.57\pp at high SNR. Under Rayleigh fading, the gain remains approximately 29.4--30.1\pp between $+5$ and $+10$~dB. The distilled and baseline models differ by less than 0.4~dB PSNR over the sweep. At $-5$~dB AWGN, both task accuracies approach the 30-class random level, marking the lower operating boundary of the current hard-decision discrete path.
+We sweep ten SNR points from $-5$ to $20$~dB. The AWGN task gain peaks at 30.70\pp at $+2$~dB and converges to approximately 26.57\pp at high SNR. Under Rayleigh fading, the gain remains approximately 29.4--30.1\pp between $+5$ and $+10$~dB. The distilled and baseline models differ by less than 0.4~dB PSNR over the sweep. At $-5$~dB AWGN, both task accuracies approach the 30-class random level, marking the lower operating boundary of the current hard-decision discrete path.
 
 \subsection{Comparison with Existing Methods}
 

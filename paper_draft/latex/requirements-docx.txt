@@ -1,0 +1,6 @@
+python-docx>=1.2,<2
+Pillow>=12,<13
+matplotlib>=3.10,<4
+pandas>=3,<4
+latex2mathml==3.81.0
+mathml2omml==0.0.2
